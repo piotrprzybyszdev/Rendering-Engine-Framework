@@ -15,6 +15,8 @@ add_configuration(PROFILE RELEASE FALSE)
 
 add_subdirectory(ref)
 
+add_subdirectory(vendor/spdlog)
+
 if (CMAKE_GENERATOR MATCHES "Visual Studio")
     set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT "ref")
 endif()

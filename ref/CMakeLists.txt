@@ -26,3 +26,5 @@ target_compile_options(ref PRIVATE
 target_link_options(ref PRIVATE
   $<$<CXX_COMPILER_ID:MSVC>:/ignore:4099>
 )
+
+target_link_libraries(ref PRIVATE spdlog)
