@@ -1,0 +1,33 @@
+---
+BasedOnStyle: Microsoft
+AccessModifierOffset: -4
+AlignAfterOpenBracket: BlockIndent
+AllowShortBlocksOnASingleLine: Empty
+BraceWrapping:
+  AfterCaseLabel: true
+  AfterClass: true
+  AfterControlStatement: Always
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterObjCDeclaration: true
+  AfterStruct: true
+  AfterUnion: false
+  AfterExternBlock: true
+  BeforeCatch: true
+  BeforeElse: true
+  BeforeLambdaBody: false
+  BeforeWhile: false
+  IndentBraces: false
+  SplitEmptyFunction: true
+  SplitEmptyRecord: true
+  SplitEmptyNamespace: true
+ColumnLimit: 110
+FixNamespaceComments: false
+SpaceAfterTemplateKeyword: false
+SpacesBeforeTrailingComments: 2
+IndentPPDirectives: None
+Cpp11BracedListStyle: false
+SpaceBeforeCpp11BracedList: true
+BreakTemplateDeclarations: MultiLine
+RequiresClausePosition: WithPreceding
