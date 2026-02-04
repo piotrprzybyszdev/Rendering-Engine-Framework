@@ -1,0 +1,83 @@
+#pragma once
+
+#include <vulkan/vulkan.hpp>
+
+#include <map>
+#include <memory>
+
+#include "Core/Window.h"
+
+#include "Swapchain.h"
+
+namespace ref::vulkan
+{
+
+struct Queue
+{
+    uint32_t FamilyIndex;
+    vk::Queue Handle;
+};
+
+struct ApplicationSpec
+{
+    std::unique_ptr<Window> ApplicationWindow;
+    vk::SurfaceKHR Surface;
+    std::optional<vk::DebugUtilsMessengerEXT> DebugMessenger;
+    vk::detail::DispatchLoaderDynamic DispatchLoader;
+    vk::PhysicalDevice PhysicalDevice;
+    vk::Device LogicalDevice;
+    std::map<const char *, Queue> Queues;
+};
+
+class Application
+{
+public:
+    static inline constexpr const char *MainQueueName = "Ref Main Queue";
+    static inline constexpr const char *AsyncComputeQueueName = "Ref Async Compute Queue";
+    static inline constexpr const char *AsyncTransferQueueName = "Ref Async Transfer Queue";
+
+public:
+    static Application *GetInstance();
+
+public:
+    Application(ApplicationSpec &&spec);
+    ~Application();
+
+    template<typename T> requires vk::isVulkanHandleType<T>::value
+    void SetDebugName(T handle, const char *name);
+
+    void Run();
+
+private:
+    static inline Application *s_Instance = nullptr;
+
+private:
+    std::unique_ptr<Window> m_Window;
+    vk::SurfaceKHR m_Surface;
+
+    std::optional<vk::DebugUtilsMessengerEXT> m_DebugMessenger;
+    vk::detail::DispatchLoaderDynamic m_DispatchLoader;
+
+    vk::PhysicalDevice m_PhysicalDevice;
+    vk::Device m_LogicalDevice;
+
+    Queue m_MainQueue;
+
+    std::unique_ptr<Swapchain> m_Swapchain;
+};
+
+template<typename T> requires vk::isVulkanHandleType<T>::value
+inline void Application::SetDebugName(T handle, const char *name)
+{
+    if (!m_DebugMessenger.has_value())
+        return;
+
+    m_LogicalDevice.setDebugUtilsObjectNameEXT(
+        vk::DebugUtilsObjectNameInfoEXT(
+            T::objectType, reinterpret_cast<uint64_t>(static_cast<T::CType>(handle)), name
+        ),
+        m_DispatchLoader
+    );
+}
+
+}

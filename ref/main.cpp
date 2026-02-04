@@ -1,10 +1,25 @@
-#include "Core.h"
+#include "Core/Core.h"
+
+#include "Vulkan/Application.h"
+#include "Vulkan/ApplicationBuilder.h"
 
 using namespace ref;
 
 int main()
 {
-	logger::info("Hello World");
+    logger::set_level(logger::level::debug);
 
-	return 0;
+    vulkan::ApplicationBuilder::InitSystems();
+
+    vulkan::ApplicationBuilder builder;
+    builder.EnableBase();
+
+    {
+        vulkan::Application application = builder.CreateApplication("REF");
+        application.Run();
+    }
+
+    vulkan::ApplicationBuilder::ShutdownSystems();
+
+    return 0;
 }

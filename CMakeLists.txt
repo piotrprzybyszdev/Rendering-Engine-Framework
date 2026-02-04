@@ -16,8 +16,12 @@ add_configuration(PROFILE RELEASE FALSE)
 add_subdirectory(ref)
 
 add_subdirectory(vendor/spdlog)
+add_subdirectory(vendor/glfw)
 
 set_target_properties(spdlog PROPERTIES FOLDER vendor)
+set_target_properties(glfw PROPERTIES FOLDER vendor/GLFW3)
+set_target_properties(uninstall PROPERTIES FOLDER vendor/GLFW3)
+set_target_properties(update_mappings PROPERTIES FOLDER vendor/GLFW3)
 
 if (CMAKE_GENERATOR MATCHES "Visual Studio")
     set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT "ref")

@@ -29,19 +29,19 @@ add_library(vulkan STATIC IMPORTED)
 if (WIN32)
     set_target_properties(vulkan PROPERTIES
         IMPORTED_LINK_INTERFACE_LANGUAGES "CXX"
-        INTERFACE_INCLUDE_DIRECTORIES "$ENV{VULKAN_SDK}/include/vulkan"
+        INTERFACE_INCLUDE_DIRECTORIES "$ENV{VULKAN_SDK}/include/"
         IMPORTED_LOCATION "$ENV{VULKAN_SDK}/Lib/vulkan-1.lib"
     )
 elseif (APPLE)
      set_target_properties(vulkan PROPERTIES
          IMPORTED_LINK_INTERFACE_LANGUAGES "CXX"
-         INTERFACE_INCLUDE_DIRECTORIES "$ENV{VULKAN_SDK}/include/vulkan"
+         INTERFACE_INCLUDE_DIRECTORIES "$ENV{VULKAN_SDK}/include/"
          IMPORTED_LOCATION "$ENV{VULKAN_SDK}/lib/libvulkan.dylib"
      )
 else()
     set_target_properties(vulkan PROPERTIES
         IMPORTED_LINK_INTERFACE_LANGUAGES "CXX"
-        INTERFACE_INCLUDE_DIRECTORIES "$ENV{VULKAN_SDK}/include/vulkan"
+        INTERFACE_INCLUDE_DIRECTORIES "$ENV{VULKAN_SDK}/include/"
         IMPORTED_LOCATION "$ENV{VULKAN_SDK}/lib/libvulkan.so"
     )
 endif()
