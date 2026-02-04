@@ -1,8 +1,10 @@
-#include <spdlog/spdlog.h>
+#include "Core.h"
+
+using namespace ref;
 
 int main()
 {
-	spdlog::info("Hello World");
+	logger::info("Hello World");
 
 	return 0;
 }

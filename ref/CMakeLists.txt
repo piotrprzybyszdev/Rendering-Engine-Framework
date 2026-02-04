@@ -1,6 +1,6 @@
 include(${CMAKE_SOURCE_DIR}/cmake/ConfigureVulkan.cmake)
 
-set(HEADER_FILES )
+set(HEADER_FILES Core.h)
 
 set(SOURCE_FILES main.cpp)
 
@@ -27,4 +27,4 @@ target_link_options(ref PRIVATE
   $<$<CXX_COMPILER_ID:MSVC>:/ignore:4099>
 )
 
-target_link_libraries(ref PRIVATE spdlog)
+target_link_libraries(ref PRIVATE vulkan spdlog)
