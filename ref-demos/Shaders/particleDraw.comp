@@ -1,0 +1,24 @@
+#version 460
+
+struct VkDrawIndexedIndirectCommand {
+    uint    indexCount;
+    uint    instanceCount;
+    uint    firstIndex;
+    int     vertexOffset;
+    uint    firstInstance;
+};
+
+layout(binding = 0, set = 0) writeonly buffer IndirectBuffer {
+    VkDrawIndexedIndirectCommand[1] u_DrawCommands;
+};
+
+layout(push_constant) uniform PushConstantLayout {
+    uint pc_ParticleIdx;
+};
+
+layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    u_DrawCommands[0] = VkDrawIndexedIndirectCommand(3, 1, 0, int(pc_ParticleIdx * 3), 0);
+}

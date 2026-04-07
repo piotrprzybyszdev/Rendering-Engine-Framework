@@ -4,24 +4,25 @@
 
 #include <map>
 #include <memory>
+#include <optional>
+#include <string>
+#include <utility>
 
 #include "Core/Window.h"
 
+#include "ApplicationState.h"
 #include "Swapchain.h"
+#include "Renderer/Renderer.h"
 
 namespace ref::vulkan
 {
-
-struct Queue
-{
-    uint32_t FamilyIndex;
-    vk::Queue Handle;
-};
 
 struct ApplicationSpec
 {
     std::unique_ptr<Window> ApplicationWindow;
     vk::SurfaceKHR Surface;
+    uint32_t ApiVersion;
+    vk::Instance Instance;
     std::optional<vk::DebugUtilsMessengerEXT> DebugMessenger;
     vk::detail::DispatchLoaderDynamic DispatchLoader;
     vk::PhysicalDevice PhysicalDevice;
@@ -43,10 +44,23 @@ public:
     Application(ApplicationSpec &&spec);
     ~Application();
 
+    Application(const Application &) = delete;
+    Application &operator=(const Application &) = delete;
+
+    const ApplicationStateSpec &GetApplicationStateSpec();
+
+    void Run(const std::string &state);
+
+    void AddState(const std::string &name, std::unique_ptr<ApplicationState> state);
+    void SetNextState(const std::string &name);
+
+    void SetRecreateSwapchain();
+
     template<typename T> requires vk::isVulkanHandleType<T>::value
     void SetDebugName(T handle, const char *name);
 
-    void Run();
+    template<typename S, typename... Args> requires std::is_base_of_v<ApplicationState, S>
+    void AddAndCreateState(const std::string &name, Args&&...args);
 
 private:
     static inline Application *s_Instance = nullptr;
@@ -55,6 +69,11 @@ private:
     std::unique_ptr<Window> m_Window;
     vk::SurfaceKHR m_Surface;
 
+    std::unique_ptr<ShaderLibrary> m_ShaderLibrary;
+    std::unique_ptr<PipelineLibrary> m_PipelineLibrary;
+
+    uint32_t m_ApiVersion;
+    vk::Instance m_Instance;
     std::optional<vk::DebugUtilsMessengerEXT> m_DebugMessenger;
     vk::detail::DispatchLoaderDynamic m_DispatchLoader;
 
@@ -62,8 +81,16 @@ private:
     vk::Device m_LogicalDevice;
 
     Queue m_MainQueue;
-
+    
+    bool m_RecreateSwapchain = false;
+    SwapchainBuilder m_SwapchainBuilder;
     std::unique_ptr<Swapchain> m_Swapchain;
+
+    ApplicationStateSpec m_ApplicationStateSpec;
+
+    std::map<std::string, std::unique_ptr<ApplicationState>> m_States;
+    ApplicationState *m_CurrentState = nullptr;
+    ApplicationState *m_NextState = nullptr;
 };
 
 template<typename T> requires vk::isVulkanHandleType<T>::value
@@ -78,6 +105,12 @@ inline void Application::SetDebugName(T handle, const char *name)
         ),
         m_DispatchLoader
     );
+}
+
+template<typename S, typename... Args> requires std::is_base_of_v<ApplicationState, S>
+inline void Application::AddAndCreateState(const std::string &name, Args &&...args)
+{
+    m_States[name] = std::make_unique<S>(m_ApplicationStateSpec, std::forward<Args>(args)...);
 }
 
 }

@@ -59,6 +59,16 @@ bool Window::ShouldClose() const
     return glfwWindowShouldClose(m_Handle) == GLFW_TRUE;
 }
 
+bool Window::IsMinimized() const
+{
+    return glfwGetWindowAttrib(m_Handle, GLFW_ICONIFIED) == GLFW_TRUE;
+}
+
+GLFWwindow *Window::GetHandle() const
+{
+    return m_Handle;
+}
+
 std::pair<uint32_t, uint32_t> Window::GetSize() const
 {
     int width, height;

@@ -1,3 +1,6 @@
+#include <chrono>
+#include <thread>
+
 #include "Core/Core.h"
 
 #include "Application.h"
@@ -11,125 +14,136 @@ Application *Application::GetInstance()
 }
 
 Application::Application(ApplicationSpec &&spec)
-    : m_Window(std::move(spec.ApplicationWindow)), m_Surface(spec.Surface), m_DebugMessenger(spec.DebugMessenger),
+    : m_Window(std::move(spec.ApplicationWindow)), m_Surface(spec.Surface),
+      m_ApiVersion(spec.ApiVersion), m_Instance(spec.Instance),
+      m_DebugMessenger(spec.DebugMessenger),
       m_DispatchLoader(spec.DispatchLoader), m_PhysicalDevice(spec.PhysicalDevice),
-      m_LogicalDevice(spec.LogicalDevice), m_MainQueue(spec.Queues.at(MainQueueName))
+      m_LogicalDevice(spec.LogicalDevice), m_MainQueue(spec.Queues.at(MainQueueName)),
+      m_SwapchainBuilder(spec.PhysicalDevice, spec.Surface)
 {
-    for (const auto &[name, queue] : spec.Queues)
-        SetDebugName(queue.Handle, name);
-
     if (s_Instance != nullptr)
         throw std::runtime_error("Only one instance of the application must exist");
 
     s_Instance = this;
+
+    for (const auto &[name, queue] : spec.Queues)
+        SetDebugName(queue.Handle, name);
+
+    m_SwapchainBuilder.SetUsageFlags(
+        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst
+    );
+    m_SwapchainBuilder.SetPresentMode(vk::PresentModeKHR::eFifo);
+    m_SwapchainBuilder.SetImageCount(std::clamp(2u, m_SwapchainBuilder.GetMinImageCount(), m_SwapchainBuilder.GetMaxImageCount()));
+    m_SwapchainBuilder.SetSurfaceFormat(
+        vk::SurfaceFormatKHR(vk::Format::eR8G8B8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear)
+    );
+    m_SwapchainBuilder.SetPresentQueueFamilies({ m_MainQueue.FamilyIndex });
+    vk::Extent2D extent;
+    std::tie(extent.width, extent.height) = m_Window->GetSize();
+    m_SwapchainBuilder.SetExtent(extent);
+
+    m_ShaderLibrary = std::make_unique<ShaderLibrary>(m_LogicalDevice, m_ApiVersion);
+    m_PipelineLibrary = std::make_unique<PipelineLibrary>(m_LogicalDevice, m_ShaderLibrary.get());
+
+    m_ApplicationStateSpec = ApplicationStateSpec {
+        .ApplicationWindow = m_Window.get(),
+        .ShaderLibrary = m_ShaderLibrary.get(),
+        .PipelineLibrary = m_PipelineLibrary.get(),
+        .ApiVersion = m_ApiVersion,
+        .Instance = m_Instance,
+        .DispatchLoader = &m_DispatchLoader,
+        .PhysicalDevice = m_PhysicalDevice,
+        .LogicalDevice = m_LogicalDevice,
+        .Queues = spec.Queues,
+        .SwapchainBuilder = &m_SwapchainBuilder,
+    };
 }
 
 Application::~Application()
 {
+    m_ShaderLibrary->WriteShaderCache();
     s_Instance = nullptr;
 }
 
-void Application::Run()
+const ApplicationStateSpec &Application::GetApplicationStateSpec()
 {
-    vk::Extent2D extent;
-    {
-        auto [width, height] = m_Window->GetSize();
-        extent = vk::Extent2D(width, height);
-    }
+    return m_ApplicationStateSpec;
+}
 
-    std::array<uint32_t, 1> presentQueueFamilies = { m_MainQueue.FamilyIndex };
-    SwapchainSpec swapchainSpec = {
-        .Surface = m_Surface,
-        .UsageFlags = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst,
-        .PresentMode = vk::PresentModeKHR::eFifo,
-        .SurfaceFormat = vk::SurfaceFormatKHR(vk::Format::eR8G8B8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear),
-        .Extent = extent,
-        .ImageCount = 2,
-        .PresentQueueFamilies = presentQueueFamilies,
-    };
+void Application::Run(const std::string &state)
+{
+    m_CurrentState = m_NextState = m_States.at(state).get();
+    m_CurrentState->OnEnter(nullptr);
 
-    m_Swapchain = std::make_unique<Swapchain>(m_LogicalDevice, swapchainSpec);
-
-    vk::CommandPoolCreateInfo createInfo(
-        vk::CommandPoolCreateFlagBits::eResetCommandBuffer, m_MainQueue.FamilyIndex
-    );
-    auto pool = m_LogicalDevice.createCommandPool(createInfo);
-
-    vk::CommandBufferAllocateInfo allocateInfo(pool, vk::CommandBufferLevel::ePrimary, 1);
-    auto buffer = m_LogicalDevice.allocateCommandBuffers(allocateInfo)[0];
+    auto time = std::chrono::steady_clock::now();
 
     while (!m_Window->ShouldClose())
     {
+        const auto newTime = std::chrono::steady_clock::now();
+        const float timeStep = std::chrono::duration<float, std::milli>(newTime - time).count();
+        time = newTime;
+
         Window::PollEvents();
 
-        auto [width, height] = m_Window->GetSize();
-        if (extent.width != width || extent.height != height)
+        if (m_Window->IsMinimized())
         {
-            extent = vk::Extent2D(width, height);
-            swapchainSpec.Extent = extent;
-            m_Swapchain = std::make_unique<Swapchain>(m_LogicalDevice, swapchainSpec, m_Swapchain.get());
+            using namespace std::chrono_literals;
+            std::this_thread::sleep_for(16.6ms);
+            continue;
+        }
+
+        auto [width, height] = m_Window->GetSize();
+        if (m_Swapchain == nullptr || m_RecreateSwapchain ||
+            m_Swapchain->GetExtent() != vk::Extent2D(width, height))
+        {
+            m_SwapchainBuilder.RefreshSurfaceCabilities();
+            m_SwapchainBuilder.SetExtent(vk::Extent2D(width, height));
+            m_MainQueue.Handle.waitIdle();
+            m_Swapchain = m_SwapchainBuilder.CreateSwapchainUnique(m_LogicalDevice, m_Swapchain.get());
+            m_CurrentState->OnResize(m_Swapchain.get());
+            m_RecreateSwapchain = false;
             continue;
         }
 
         m_Swapchain->AcquireImage(m_LogicalDevice);
 
-        buffer.reset();
-        buffer.begin(vk::CommandBufferBeginInfo());
+        m_CurrentState->OnUpdate(timeStep);
 
-        const auto image = m_Swapchain->GetCurrentFrame().Image;
-
-        const vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
-
+        while (m_CurrentState != m_NextState)
         {
-            vk::ImageMemoryBarrier2 barrier(
-                vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
-                vk::PipelineStageFlagBits2::eClear, vk::AccessFlagBits2::eTransferWrite,
-                vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, vk::QueueFamilyIgnored,
-                vk::QueueFamilyIgnored, image, range
-            );
-
-            vk::DependencyInfo dependency;
-            dependency.setImageMemoryBarriers(barrier);
-
-            buffer.pipelineBarrier2(dependency);
+            m_CurrentState->OnExit(m_NextState);
+            m_NextState->OnEnter(m_CurrentState);
+            m_CurrentState = m_NextState;
+            if (m_RecreateSwapchain)
+                break;
+            m_CurrentState->OnResize(m_Swapchain.get());
+            m_CurrentState->OnUpdate(timeStep);
         }
 
-        buffer.clearColorImage(
-            image, vk::ImageLayout::eTransferDstOptimal, vk::ClearColorValue(0.0f, 0.0f, 1.0f, 0.0f),
-            { range }
-        );
+        if (m_RecreateSwapchain)
+            continue;
 
-        {
-            vk::ImageMemoryBarrier2 barrier(
-                vk::PipelineStageFlagBits2::eClear, vk::AccessFlagBits2::eTransferWrite,
-                vk::PipelineStageFlagBits2::eBottomOfPipe, vk::AccessFlagBits2::eNone,
-                vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::ePresentSrcKHR, vk::QueueFamilyIgnored,
-                vk::QueueFamilyIgnored, image, range
-            );
+        m_CurrentState->OnRender();
 
-            vk::DependencyInfo dependency;
-            dependency.setImageMemoryBarriers(barrier);
-
-            buffer.pipelineBarrier2(dependency);
-        }
-
-        buffer.end();
-
-        const auto &sync = m_Swapchain->GetCurrentSynchronizationObjects();
-
-        vk::CommandBufferSubmitInfo cmdInfo(buffer);
-        vk::SemaphoreSubmitInfo waitInfo(
-            sync.ImageAcquiredSemaphore, 0, vk::PipelineStageFlagBits2::eAllCommands
-        );
-        vk::SemaphoreSubmitInfo signalInfo(
-            sync.RenderCompleteSemaphore, 0, vk::PipelineStageFlagBits2::eAllCommands
-        );
-        vk::SubmitInfo2 submitInfo(vk::SubmitFlags(), waitInfo, cmdInfo, signalInfo);
-
-        m_MainQueue.Handle.submit2({ submitInfo }, sync.InFlightFence);
         m_Swapchain->Present(m_MainQueue.Handle);
-        m_MainQueue.Handle.waitIdle();
     }
+
+    m_LogicalDevice.waitIdle();
+}
+
+void Application::AddState(const std::string &name, std::unique_ptr<ApplicationState> state)
+{
+    m_States[name] = std::move(state);
+}
+
+void Application::SetNextState(const std::string &name)
+{
+    m_NextState = m_States.at(name).get();
+}
+
+void Application::SetRecreateSwapchain()
+{
+    m_RecreateSwapchain = true;
 }
 
 }

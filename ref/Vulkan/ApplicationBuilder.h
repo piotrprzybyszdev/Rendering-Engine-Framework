@@ -2,8 +2,6 @@
 
 #include <vulkan/vulkan.hpp>
 
-#include "Core/Window.h"
-
 #include "Application.h"
 #include "Features.h"
 
@@ -30,12 +28,17 @@ public:
     static void ShutdownSystems();
 
 public:
+    ApplicationBuilder() = default;
+    ApplicationBuilder(const ApplicationBuilder &) = delete;
+    ApplicationBuilder &operator=(const ApplicationBuilder &) = delete;
+
     ApplicationBuilder &EnableBase();
     ApplicationBuilder &EnablePortability();
     ApplicationBuilder &EnableValidationLayers(
         std::optional<vk::DebugUtilsMessengerCreateInfoEXT> debugInfo = std::nullopt
     );
     ApplicationBuilder &RequestDefaultQueues();
+    ApplicationBuilder &EnableUserInterface();
 
     ApplicationBuilder &SetApiVersion(uint32_t version);
     ApplicationBuilder &EnableExtension(const char *extension);

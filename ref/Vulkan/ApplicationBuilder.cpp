@@ -1,6 +1,8 @@
 #include <ranges>
 
 #include "Core/Core.h"
+#include "Core/UserInterface.h"
+#include "Core/Window.h"
 
 #include "ApplicationBuilder.h"
 
@@ -35,21 +37,22 @@ VKAPI_ATTR vk::Bool32 VKAPI_CALL DefaultDebugCallback(
 void ApplicationBuilder::InitSystems()
 {
     Window::InitSystem();
+    UserInterface::InitSystem();
 }
 
 void ApplicationBuilder::ShutdownSystems()
 {
+    UserInterface::ShutdownSystem();
     Window::ShutdownSystem();
 }
 
 ApplicationBuilder &ApplicationBuilder::EnableBase()
 {
     SetApiVersion(vk::ApiVersion13);
-    EnablePortability();
-    EnableDeviceExtension(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
-    EnableDeviceExtension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
-    EnableFeatures(vk::PhysicalDeviceSynchronization2Features().setSynchronization2(vk::True));
+    // EnablePortability();
+    EnableFeatures(vk::PhysicalDeviceVulkan13Features().setSynchronization2(vk::True));
     SetWindow(nullptr, 1280u, 720u);
+    EnableUserInterface();
 
 #if defined(REF_CONFIG_DEBUG) || defined(REF_CONFIG_TRACE)
     EnableValidationLayers();
@@ -115,6 +118,14 @@ ApplicationBuilder &ApplicationBuilder::RequestDefaultQueues()
                     .Optional = true,
                     .Exclusive = { Application::MainQueueName, Application::AsyncComputeQueueName } }
     );
+    return *this;
+}
+
+ApplicationBuilder &ApplicationBuilder::EnableUserInterface()
+{
+    if (m_ApiVersion < vk::ApiVersion13)
+        EnableDeviceExtension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
+    EnableFeatures(vk::PhysicalDeviceVulkan13Features().setDynamicRendering(vk::True));
     return *this;
 }
 
@@ -301,7 +312,8 @@ Application ApplicationBuilder::CreateApplication(const char *name, uint32_t ver
         }
 
     return Application(ApplicationSpec(
-        std::move(window), surface, messenger, dispatchLoader, physicalDevice, logicalDevice, m_Queues
+        std::move(window), surface, m_ApiVersion, instance, messenger, dispatchLoader, physicalDevice,
+        logicalDevice, m_Queues
     ));
 }
 
@@ -369,9 +381,13 @@ bool ApplicationBuilder::CheckPhysicalDevice(vk::PhysicalDevice device, vk::Surf
     );
 
     // Api Version
+    logger::debug(
+        "Device {} supports at most Vulkan version: {}", deviceName,
+        ApiVersionToString(properties.properties.apiVersion)
+    );
     if (properties.properties.apiVersion < m_ApiVersion)
     {
-        logger::warn("{} does not support Vulkan version {}", deviceName, ApiVersionToString(m_ApiVersion));
+        logger::warn("Device {} does not support Vulkan version {}", deviceName, ApiVersionToString(m_ApiVersion));
         return false;
     }
 
@@ -404,7 +420,7 @@ bool ApplicationBuilder::CheckPhysicalDevice(vk::PhysicalDevice device, vk::Surf
     auto queueFamilies = device.getQueueFamilyProperties2();
     for (size_t i = 0; i < queueFamilies.size(); i++)
         logger::debug(
-            "{} has Queue Family {}({}): {}", deviceName, i,
+            "{} has Queue Family {} ({}): {}", deviceName, i,
             queueFamilies[i].queueFamilyProperties.queueCount,
             vk::to_string(queueFamilies[i].queueFamilyProperties.queueFlags)
         );

@@ -30,7 +30,9 @@ public:
     Window &operator=(const Window &) = delete;
 
     bool ShouldClose() const;
+    bool IsMinimized() const;
 
+    GLFWwindow *GetHandle() const;
     std::pair<uint32_t, uint32_t> GetSize() const;
 
 public:

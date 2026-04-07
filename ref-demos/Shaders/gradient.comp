@@ -1,0 +1,19 @@
+#version 460
+
+layout(binding = 0, set = 0, rgba8) uniform image2D u_Image;
+
+layout(push_constant) uniform PushConstantLayout {
+    float pc_Time;
+};
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+void main()
+{
+    const ivec2 imageSize = imageSize(u_Image);
+    const ivec2 imageCoords = ivec2(gl_GlobalInvocationID.xy);
+
+    vec4 color = vec4(vec2(imageCoords) / imageSize, (1.0f + sin(pc_Time)) / 2.0f, 1.0f);
+
+    imageStore(u_Image, imageCoords, color);
+}
