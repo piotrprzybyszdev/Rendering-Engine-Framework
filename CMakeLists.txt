@@ -8,13 +8,14 @@ set(CMAKE_CONFIGURATION_TYPES Release Profile Debug Trace)
 
 project(ref LANGUAGES CXX C)
 
+option(REF_BUILD_DEMOS "Build REF demo programs" ON)
+
 include(${CMAKE_SOURCE_DIR}/cmake/Utils.cmake)
 
 add_configuration(TRACE DEBUG TRUE)
 add_configuration(PROFILE RELEASE FALSE)
 
 add_subdirectory(ref)
-add_subdirectory(ref-demos)
 
 add_subdirectory(vendor/spdlog)
 add_subdirectory(vendor/glfw)
@@ -28,6 +29,9 @@ set_target_properties(update_mappings PROPERTIES FOLDER vendor/GLFW3)
 set_target_properties(imgui PROPERTIES FOLDER vendor)
 set_target_properties(vma PROPERTIES FOLDER vendor)
 
-if (CMAKE_GENERATOR MATCHES "Visual Studio")
-    set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT "ref-demos")
+if (REF_BUILD_DEMOS)
+    add_subdirectory(ref-demos)
+    if (CMAKE_GENERATOR MATCHES "Visual Studio")
+        set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT "ref-demos")
+    endif()
 endif()

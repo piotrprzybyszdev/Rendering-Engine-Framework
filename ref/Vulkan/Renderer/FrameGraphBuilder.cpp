@@ -7,40 +7,46 @@
 namespace ref::vulkan
 {
 
-void FrameGraphBuilder::AddHostBuffer(std::string name, vk::BufferCreateInfo info, bool buffered)
+void FrameGraphBuilder::AddHostBuffer(
+    std::string name, vk::BufferCreateInfo info, bool buffered, bool persistent
+)
 {
     if (m_Spec.Buffers.contains(name))
-        logger::warn("Buffer `{}` already exists and will be overriden", name);
+        logger::warn("Buffer `{}` already exists and will be overridden", name);
 
-    m_Spec.Buffers[name] = Buffer(info, false, buffered, {});
+    m_Spec.Buffers[name] = Buffer(info, false, buffered, persistent, {});
 }
 
-void FrameGraphBuilder::AddDeviceBuffer(std::string name, vk::BufferCreateInfo info, bool buffered)
+void FrameGraphBuilder::AddDeviceBuffer(
+    std::string name, vk::BufferCreateInfo info, bool buffered, bool persistent
+)
 {
     if (m_Spec.Buffers.contains(name))
-        logger::warn("Buffer `{}` already exists and will be overriden", name);
+        logger::warn("Buffer `{}` already exists and will be overridden", name);
 
-    m_Spec.Buffers[name] = Buffer(info, true, buffered, {});
+    m_Spec.Buffers[name] = Buffer(info, true, buffered, persistent, {});
 }
 
 void FrameGraphBuilder::AddHostImage(
-    std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, bool buffered
+    std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, bool buffered,
+    bool persistent
 )
 {
     if (m_Spec.Images.contains(name))
-        logger::warn("Image `{}` already exists and will be overriden", name);
+        logger::warn("Image `{}` already exists and will be overridden", name);
 
-    m_Spec.Images[name] = Image(info, viewInfo, false, buffered, {});
+    m_Spec.Images[name] = Image(info, viewInfo, false, buffered, persistent, {});
 }
 
 void FrameGraphBuilder::AddDeviceImage(
-    std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, bool buffered
+    std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, bool buffered,
+    bool persistent
 )
 {
     if (m_Spec.Images.contains(name))
-        logger::warn("Image `{}` already exists and will be overriden", name);
+        logger::warn("Image `{}` already exists and will be overridden", name);
 
-    m_Spec.Images[name] = Image(info, viewInfo, true, buffered, {});
+    m_Spec.Images[name] = Image(info, viewInfo, true, buffered, persistent, {});
 }
 
 namespace
@@ -63,32 +69,53 @@ vk::ImageViewType ToImageViewType(vk::ImageType type)
 
 vk::ImageViewCreateInfo ToImageViewCreateInfo(const vk::ImageCreateInfo &info)
 {
-    // TODO: Improve by infering image aspect
+    auto toAspectFlags = [](vk::Format format) -> vk::ImageAspectFlags {
+        switch (format)
+        {
+        case vk::Format::eD16Unorm:
+        case vk::Format::eD32Sfloat:
+        case vk::Format::eX8D24UnormPack32:
+            return vk::ImageAspectFlagBits::eDepth;
+        case vk::Format::eS8Uint:
+            return vk::ImageAspectFlagBits::eStencil;
+        case vk::Format::eD16UnormS8Uint:
+        case vk::Format::eD24UnormS8Uint:
+        case vk::Format::eD32SfloatS8Uint:
+            return vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
+        default:
+            return vk::ImageAspectFlagBits::eColor;
+        }
+    };
+
     vk::ImageViewCreateInfo viewInfo;
     viewInfo.setFormat(info.format);
     viewInfo.setViewType(ToImageViewType(info.imageType));
     viewInfo.setSubresourceRange(
-        vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, info.arrayLayers, 0, info.mipLevels)
+        vk::ImageSubresourceRange(toAspectFlags(info.format), 0, info.arrayLayers, 0, info.mipLevels)
     );
     return viewInfo;
 }
 
 }
 
-void FrameGraphBuilder::AddHostImage(std::string name, vk::ImageCreateInfo info, bool buffered)
+void FrameGraphBuilder::AddHostImage(
+    std::string name, vk::ImageCreateInfo info, bool buffered, bool persistent
+)
 {
     if (m_Spec.Images.contains(name))
-        logger::warn("Image `{}` already exists and will be overriden", name);
+        logger::warn("Image `{}` already exists and will be overridden", name);
 
-    m_Spec.Images[name] = Image(info, ToImageViewCreateInfo(info), false, buffered, {});
+    m_Spec.Images[name] = Image(info, ToImageViewCreateInfo(info), false, buffered, persistent, {});
 }
 
-void FrameGraphBuilder::AddDeviceImage(std::string name, vk::ImageCreateInfo info, bool buffered)
+void FrameGraphBuilder::AddDeviceImage(
+    std::string name, vk::ImageCreateInfo info, bool buffered, bool persistent
+)
 {
     if (m_Spec.Images.contains(name))
-        logger::warn("Image `{}` already exists and will be overriden", name);
+        logger::warn("Image `{}` already exists and will be overridden", name);
 
-    m_Spec.Images[name] = Image(info, ToImageViewCreateInfo(info), true, buffered, {});
+    m_Spec.Images[name] = Image(info, ToImageViewCreateInfo(info), true, buffered, persistent, {});
 }
 
 void WarnImageBindings(std::span<const ImageBinding> bindings)
@@ -100,20 +127,29 @@ void WarnImageBindings(std::span<const ImageBinding> bindings)
 Consider creating a storage image and blitting the result onto the swapchain image.)");
 }
 
+template<typename T> void AssertPass(const std::map<std::string, T> &passes, const std::string &name)
+{
+    if (passes.contains(name))
+        throw std::runtime_error(std::format("Pass `{}` already exists", name));
+}
+
 void FrameGraphBuilder::AddClearPass(std::string name, ClearPassSpec spec)
 {
+    AssertPass(m_Spec.ClearPasses, name);
     m_Spec.ClearPasses[name] = { std::move(spec) };
     m_Spec.PassExecutions.emplace_back(PassType::Clear, name);
 }
 
 void FrameGraphBuilder::AddBlitPass(std::string name, BlitPassSpec spec)
 {
+    AssertPass(m_Spec.BlitPasses, name);
     m_Spec.BlitPasses[name] = { std::move(spec) };
     m_Spec.PassExecutions.emplace_back(PassType::Blit, name);
 }
 
 void FrameGraphBuilder::AddComputePass(std::string name, ComputePassSpec spec)
 {
+    AssertPass(m_Spec.ComputePasses, name);
     WarnImageBindings(spec.ImageBindings);
     m_Spec.ComputePasses[name] = { std::move(spec) };
     m_Spec.PassExecutions.emplace_back(PassType::Compute, name);
@@ -121,6 +157,7 @@ void FrameGraphBuilder::AddComputePass(std::string name, ComputePassSpec spec)
 
 void FrameGraphBuilder::AddGraphicsPass(std::string name, GraphicsPassSpec spec)
 {
+    AssertPass(m_Spec.GraphicsPasses, name);
     WarnImageBindings(spec.ImageBindings);
     m_Spec.GraphicsPasses[name] = { std::move(spec) };
     m_Spec.PassExecutions.emplace_back(PassType::Graphics, name);
@@ -128,6 +165,7 @@ void FrameGraphBuilder::AddGraphicsPass(std::string name, GraphicsPassSpec spec)
 
 void FrameGraphBuilder::AddIndexedGraphicsPass(std::string name, IndexedGraphicsPassSpec spec)
 {
+    AssertPass(m_Spec.IndexedGraphicsPasses, name);
     WarnImageBindings(spec.ImageBindings);
     m_Spec.IndexedGraphicsPasses[name] = { std::move(spec) };
     m_Spec.PassExecutions.emplace_back(PassType::IndexedGraphics, name);
@@ -135,6 +173,7 @@ void FrameGraphBuilder::AddIndexedGraphicsPass(std::string name, IndexedGraphics
 
 void FrameGraphBuilder::AddIndexedIndirectGraphicsPass(std::string name, IndexedIndirectGraphicsPassSpec spec)
 {
+    AssertPass(m_Spec.IndexedIndirectGraphicsPasses, name);
     WarnImageBindings(spec.ImageBindings);
     m_Spec.IndexedIndirectGraphicsPasses[name] = { std::move(spec) };
     m_Spec.PassExecutions.emplace_back(PassType::IndexedIndirectGraphics, name);
@@ -142,6 +181,7 @@ void FrameGraphBuilder::AddIndexedIndirectGraphicsPass(std::string name, Indexed
 
 void FrameGraphBuilder::AddCustomGraphicsPass(std::string name, CustomGraphicsPassSpec spec)
 {
+    AssertPass(m_Spec.CustomGraphicsPasses, name);
     m_Spec.CustomGraphicsPasses[name] = { std::move(spec) };
     m_Spec.PassExecutions.emplace_back(PassType::CustomGraphics, name);
 }
@@ -241,6 +281,9 @@ struct FrameGraphAccesses
     // TODO: batch barriers if both are reads
     void AddBufferBarrier(const std::string &name, BufferAccess dstAccess, PassExecution &execution)
     {
+        if (Buffers.at(name).IsPersistent)
+            return;
+
         BufferAccess srcAccess = BufferResources[name];
 
         vk::BufferMemoryBarrier2 barrier(
@@ -252,12 +295,15 @@ struct FrameGraphAccesses
 
         execution.BufferBarriers.Resources.push_back(name);
         execution.BufferBarriers.Barriers.push_back(barrier);
-        logger::debug("Inserting barrier for Buffer `{}`: {}", name, ToString(barrier));
+        logger::trace("Inserting barrier for Buffer `{}`: {}", name, ToString(barrier));
     }
 
     // TODO: batch barriers if both are reads
     void AddImageBarrier(const std::string &name, ImageAccess dstAccess, PassExecution &execution)
     {
+        if (name != FrameGraph::g_SwapchainImageResourceName && Images.at(name).IsPersistent)
+            return;
+
         auto getMaxLayer = [](const vk::ImageSubresourceRange &range) {
             return range.baseArrayLayer + range.layerCount - 1;
         };
@@ -290,7 +336,7 @@ struct FrameGraphAccesses
             );
             execution.ImageBarriers.Resources.push_back(name);
             execution.ImageBarriers.Barriers.push_back(barrier);
-            logger::debug("Inserting barrier for Image `{}`: {}", name, ToString(barrier));
+            logger::trace("Inserting barrier for Image `{}`: {}", name, ToString(barrier));
 
             accesses.emplace_back(dstAccess.Stage, dstAccess.Access, dstAccess.Layout, intersection);
 
@@ -369,7 +415,7 @@ struct FrameGraphAccesses
         return access;
     }
 
-    void SynchronizePass(auto &pass, auto &execution)
+    void SynchronizePass(auto &pass, auto &execution, PipelineLibrary *pipelineLibrary)
     {
         const auto &spec = pass.Spec;
         using S = std::remove_cvref_t<decltype(spec)>;
@@ -425,12 +471,33 @@ struct FrameGraphAccesses
 
         if constexpr (HasBindings<S>)
         {
+            const auto &pipeline = pipelineLibrary->GetPipeline(spec.Pipeline);
+
+            auto toPipelineStage = [](vk::ShaderStageFlags shaders) {
+                vk::PipelineStageFlags2 stages;
+                if (shaders & vk::ShaderStageFlagBits::eCompute)
+                    stages |= vk::PipelineStageFlagBits2::eComputeShader;
+                if (shaders & vk::ShaderStageFlagBits::eFragment)
+                    stages |= vk::PipelineStageFlagBits2::eFragmentShader;
+                if (shaders & vk::ShaderStageFlagBits::eVertex)
+                    stages |= vk::PipelineStageFlagBits2::eVertexShader;
+                if (shaders & vk::ShaderStageFlagBits::eGeometry)
+                    stages |= vk::PipelineStageFlagBits2::eGeometryShader;
+                assert(
+                    (shaders & ~(vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eFragment |
+                                 vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eGeometry)) ==
+                    vk::ShaderStageFlags()
+                );
+                return stages;
+            };
+
             for (const auto &binding : spec.BufferBindings)
             {
+                const auto &bindingInfo = pipeline.DescriptorSetBuilder.GetBinding(binding.Binding);
                 AddBufferBarrier(
                     binding.BufferResource,
                     BufferAccess(
-                        vk::PipelineStageFlagBits2::eComputeShader, GetAccessFlags(binding), binding.Offset,
+                        toPipelineStage(bindingInfo.stageFlags), GetAccessFlags(binding), binding.Offset,
                         binding.Size
                     ),
                     execution
@@ -443,10 +510,11 @@ struct FrameGraphAccesses
                 if (binding.Write)
                     layout = vk::ImageLayout::eGeneral;
 
+                const auto &bindingInfo = pipeline.DescriptorSetBuilder.GetBinding(binding.Binding);
                 AddImageBarrier(
                     binding.ImageResource,
                     ImageAccess(
-                        vk::PipelineStageFlagBits2::eComputeShader, GetAccessFlags(binding), layout,
+                        toPipelineStage(bindingInfo.stageFlags), GetAccessFlags(binding), layout,
                         GetRange(binding.ImageResource)
                     ),
                     execution
@@ -499,7 +567,7 @@ struct FrameGraphAccesses
                 rendering.setResolveMode(attachment.ResolveMode);
                 pass.ColorAttachments.push_back(rendering);
 
-                logger::debug(
+                logger::trace(
                     "Attaching image resource `{}` as color attachment to pass `{}` with (load op: {}, store "
                     "op: {})",
                     execution.Name, attachment.ImageResource, vk::to_string(attachment.LoadOp),
@@ -556,7 +624,7 @@ struct FrameGraphAccesses
                 rendering.setResolveMode(attachment.ResolveMode);
                 pass.DepthAttachment = rendering;
 
-                logger::debug(
+                logger::trace(
                     "Attaching image resource `{}` as depth attachment to pass `{}` with (load op: {}, store "
                     "op: {})",
                     execution.Name, attachment.ImageResource, vk::to_string(attachment.LoadOp),
@@ -613,7 +681,7 @@ struct FrameGraphAccesses
                 rendering.setResolveMode(attachment.ResolveMode);
                 pass.StencilAttachment = rendering;
 
-                logger::debug(
+                logger::trace(
                     "Attaching image resource `{}` as stencil attachment to pass `{}` with (load op: {}, "
                     "store "
                     "op: {})",
@@ -687,10 +755,24 @@ void AssertImage(R images, const std::string &name, const std::string &passName)
 }
 
 template<std::ranges::input_range R1, std::ranges::input_range R2, typename P>
-void ValidatePass(const P &pass, R1 buffers, R2 images, const std::string &passName)
+void ValidatePass(
+    const P &pass, R1 buffers, R2 images, const std::string &passName, PipelineLibrary *pipelineLibrary
+)
 {
     const auto &spec = pass.Spec;
     using S = std::remove_cvref_t<decltype(spec)>;
+
+    if constexpr (HasPipeline<S>)
+    {
+        const auto &pipeline = pipelineLibrary->GetPipelineInstance(spec.Pipeline);
+        const auto &info = pipelineLibrary->GetPipelineInstanceInfo(spec.Pipeline);
+        if (!pipeline.IsValid())
+            throw std::runtime_error(
+                std::format(
+                    "Pipeline instance `{}` used in pass `{}` was is not compiled", info.Name, passName
+                )
+            );
+    }
 
     if constexpr (HasImageResource<S>)
     {
@@ -709,14 +791,49 @@ void ValidatePass(const P &pass, R1 buffers, R2 images, const std::string &passN
 
     if constexpr (HasBindings<S>)
     {
+        const auto &pipeline = pipelineLibrary->GetPipeline(spec.Pipeline);
         for (const auto &binding : spec.BufferBindings)
         {
+            if (!pipeline.DescriptorSetBuilder.HasBinding(binding.Binding))
+                throw std::runtime_error(
+                    std::format(
+                        "Buffer `{}` is bound to pass `{}` at binding {} but pipeline `{}` used by the pass "
+                        "does not contain the binding",
+                        binding.BufferResource, passName, binding.Binding, pipeline.Name
+                    )
+                );
+
             AssertBuffer(buffers, binding.BufferResource, passName);
         }
 
         for (const auto &binding : spec.ImageBindings)
         {
+            if (!pipeline.DescriptorSetBuilder.HasBinding(binding.Binding))
+                throw std::runtime_error(
+                    std::format(
+                        "Image `{}` is bound to pass `{}` at binding {} but pipeline `{}` used by the pass "
+                        "does not contain the binding",
+                        binding.ImageResource, passName, binding.Binding, pipeline.Name
+                    )
+                );
+
             AssertImage(images, binding.ImageResource, passName);
+        }
+
+        for (int32_t binding = 0; binding <= pipeline.DescriptorSetBuilder.GetMaxBinding(); binding++)
+        {
+            if (!pipeline.DescriptorSetBuilder.HasBinding(binding))
+                continue;
+
+            auto proj = [](const auto &bnd) { return bnd.Binding; };
+            if (!std::ranges::contains(spec.BufferBindings, binding, proj) &&
+                !std::ranges::contains(spec.ImageBindings, binding, proj))
+                throw std::runtime_error(
+                    std::format(
+                        "Pipeline `{}` expects a binding at {} but no resource was bound", pipeline.Name,
+                        binding
+                    )
+                );
         }
     }
 
@@ -769,22 +886,25 @@ std::unique_ptr<FrameGraph> FrameGraphBuilder::CreateUnique(
 
     for (const auto &execution : m_Spec.PassExecutions)
     {
-        auto validatePass = [](auto &pass, auto buffers, auto images, const std::string &passName) {
-            ValidatePass(pass, buffers, images, passName);
+        auto validatePass = [](auto &pass, auto buffers, auto images, const std::string &passName,
+                               PipelineLibrary *pipelineLibrary) {
+            ValidatePass(pass, buffers, images, passName, pipelineLibrary);
         };
 
-        Dispatch<validatePass>(
-            execution, m_Spec.Buffers | std::views::keys, m_Spec.Images | std::views::keys, execution.Name
+        Dispatch(
+            execution, validatePass, m_Spec.Buffers | std::views::keys, m_Spec.Images | std::views::keys,
+            execution.Name, pipelineLibrary
         );
     }
 
     for (auto &execution : m_Spec.PassExecutions)
     {
-        auto synchronizePass = [](auto &pass, FrameGraphAccesses *accesses, auto &execution) {
-            accesses->SynchronizePass(pass, execution);
+        auto synchronizePass = [](auto &pass, FrameGraphAccesses *accesses, auto &execution,
+                                  PipelineLibrary *pipelineLibrary) {
+            accesses->SynchronizePass(pass, execution, pipelineLibrary);
         };
 
-        Dispatch<synchronizePass>(execution, &accesses, execution);
+        Dispatch(execution, synchronizePass, &accesses, execution, pipelineLibrary);
     }
 
     for (const auto &srcAccess : accesses.ImageResources.at(FrameGraph::g_SwapchainImageResourceName))
@@ -796,10 +916,39 @@ std::unique_ptr<FrameGraph> FrameGraphBuilder::CreateUnique(
         );
 
         m_Spec.PresentImageBarriers.push_back(barrier);
-        logger::debug("Inserting Present Barrier: {}", ToString(barrier));
+        logger::trace("Inserting Present Barrier: {}", ToString(barrier));
     }
 
     return std::make_unique<FrameGraph>(pipelineLibrary, resourceAllocator, std::move(m_Spec));
+}
+
+template<typename F, typename... Args>
+void FrameGraphBuilder::Dispatch(const PassExecution &execution, F &&func, Args &&...args)
+{
+    switch (execution.Type)
+    {
+    case PassType::Clear:
+        func(m_Spec.ClearPasses.at(execution.Name), args...);
+        break;
+    case PassType::Blit:
+        func(m_Spec.BlitPasses.at(execution.Name), args...);
+        break;
+    case PassType::Compute:
+        func(m_Spec.ComputePasses.at(execution.Name), args...);
+        break;
+    case PassType::Graphics:
+        func(m_Spec.GraphicsPasses.at(execution.Name), args...);
+        break;
+    case PassType::IndexedGraphics:
+        func(m_Spec.IndexedGraphicsPasses.at(execution.Name), args...);
+        break;
+    case PassType::IndexedIndirectGraphics:
+        func(m_Spec.IndexedIndirectGraphicsPasses.at(execution.Name), args...);
+        break;
+    case PassType::CustomGraphics:
+        func(m_Spec.CustomGraphicsPasses.at(execution.Name), args...);
+        break;
+    }
 }
 
 }

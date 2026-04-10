@@ -17,18 +17,21 @@ public:
     FrameGraphBuilder(const FrameGraphBuilder &) = delete;
     FrameGraphBuilder &operator=(const FrameGraphBuilder &) = delete;
 
-    void AddHostBuffer(std::string name, vk::BufferCreateInfo info, bool buffered);
-    void AddDeviceBuffer(std::string name, vk::BufferCreateInfo info, bool buffered);
+    void AddHostBuffer(std::string name, vk::BufferCreateInfo info, bool buffered, bool persistent);
+    void AddDeviceBuffer(std::string name, vk::BufferCreateInfo info, bool buffered, bool persistent);
 
     void AddHostImage(
-        std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, bool buffered
+        std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, bool buffered,
+        bool persistent
+
     );
     void AddDeviceImage(
-        std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, bool buffered
+        std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, bool buffered,
+        bool persistent
     );
 
-    void AddHostImage(std::string name, vk::ImageCreateInfo info, bool buffered);
-    void AddDeviceImage(std::string name, vk::ImageCreateInfo info, bool buffered);
+    void AddHostImage(std::string name, vk::ImageCreateInfo info, bool buffered, bool persistent);
+    void AddDeviceImage(std::string name, vk::ImageCreateInfo info, bool buffered, bool persistent);
 
     void AddClearPass(std::string name, ClearPassSpec spec);
     void AddBlitPass(std::string name, BlitPassSpec spec);
@@ -46,33 +49,8 @@ private:
     FrameGraphSpec m_Spec;
 
 private:
-    template<auto F, typename... Args> void Dispatch(const PassExecution &execution, Args &&...args)
-    {
-        switch (execution.Type)
-        {
-        case PassType::Clear:
-            F(m_Spec.ClearPasses.at(execution.Name), args...);
-            break;
-        case PassType::Blit:
-            F(m_Spec.BlitPasses.at(execution.Name), args...);
-            break;
-        case PassType::Compute:
-            F(m_Spec.ComputePasses.at(execution.Name), args...);
-            break;
-        case PassType::Graphics:
-            F(m_Spec.GraphicsPasses.at(execution.Name), args...);
-            break;
-        case PassType::IndexedGraphics:
-            F(m_Spec.IndexedGraphicsPasses.at(execution.Name), args...);
-            break;
-        case PassType::IndexedIndirectGraphics:
-            F(m_Spec.IndexedIndirectGraphicsPasses.at(execution.Name), args...);
-            break;
-        case PassType::CustomGraphics:
-            F(m_Spec.CustomGraphicsPasses.at(execution.Name), args...);
-            break;
-        }
-    }
+    template<typename F, typename... Args>
+    void Dispatch(const PassExecution &execution, F &&func, Args &&...args);
 };
 
 }

@@ -9,6 +9,9 @@
 namespace ref::vulkan
 {
 
+static uint32_t s_ValidationWarningCount = 0;
+static uint32_t s_ValidationErrorCount = 0;
+
 VKAPI_ATTR vk::Bool32 VKAPI_CALL DefaultDebugCallback(
     vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
     vk::DebugUtilsMessageTypeFlagsEXT /* messageTypes */,
@@ -19,9 +22,11 @@ VKAPI_ATTR vk::Bool32 VKAPI_CALL DefaultDebugCallback(
     {
     case vk::DebugUtilsMessageSeverityFlagBitsEXT::eError:
         logger::error(pCallbackData->pMessage);
+        s_ValidationErrorCount++;
         break;
     case vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning:
         logger::warn(pCallbackData->pMessage);
+        s_ValidationWarningCount++;
         break;
     case vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo:
         logger::info(pCallbackData->pMessage);
@@ -44,12 +49,18 @@ void ApplicationBuilder::ShutdownSystems()
 {
     UserInterface::ShutdownSystem();
     Window::ShutdownSystem();
+
+    if (s_ValidationWarningCount)
+        logger::warn("Encountered {} validation layer warnings", s_ValidationWarningCount);
+    if (s_ValidationErrorCount)
+        logger::error("Encountered {} validation layer errors", s_ValidationErrorCount);
+    if (s_ValidationWarningCount == 0 && s_ValidationErrorCount == 0)
+        logger::info("Validation layers raised no issues");
 }
 
 ApplicationBuilder &ApplicationBuilder::EnableBase()
 {
     SetApiVersion(vk::ApiVersion13);
-    // EnablePortability();
     EnableFeatures(vk::PhysicalDeviceVulkan13Features().setSynchronization2(vk::True));
     SetWindow(nullptr, 1280u, 720u);
     EnableUserInterface();
@@ -308,7 +319,7 @@ Application ApplicationBuilder::CreateApplication(const char *name, uint32_t ver
                     .setQueueIndex(static_cast<uint32_t>(i))
             );
             m_Queues[spec.Name] = Queue(familyIndex, handle);
-            logger::info("Queue `{}` is set to queue family {}", spec.Name, familyIndex);
+            logger::trace("Queue `{}` is set to queue family {}", spec.Name, familyIndex);
         }
 
     return Application(ApplicationSpec(
@@ -419,7 +430,7 @@ bool ApplicationBuilder::CheckPhysicalDevice(vk::PhysicalDevice device, vk::Surf
     // Queues
     auto queueFamilies = device.getQueueFamilyProperties2();
     for (size_t i = 0; i < queueFamilies.size(); i++)
-        logger::debug(
+        logger::trace(
             "{} has Queue Family {} ({}): {}", deviceName, i,
             queueFamilies[i].queueFamilyProperties.queueCount,
             vk::to_string(queueFamilies[i].queueFamilyProperties.queueFlags)

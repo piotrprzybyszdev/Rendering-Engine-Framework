@@ -1,15 +1,15 @@
-include(${CMAKE_SOURCE_DIR}/cmake/ConfigureVulkan.cmake)
+include(${PROJECT_SOURCE_DIR}/cmake/ConfigureVulkan.cmake)
 
-set(HEADER_FILES Core/Core.h Core/Window.h Core/UserInterface.h Vulkan/Features.h Vulkan/ApplicationBuilder.h Vulkan/Swapchain.h Vulkan/Application.h Vulkan/ApplicationState.h Vulkan/Renderer/ResourceManager.h Vulkan/Renderer/DescriptorSet.h Vulkan/Renderer/ShaderLibrary.h Vulkan/Renderer/RenderPass.h Vulkan/Renderer/FrameGraph.h Vulkan/Renderer/FrameGraphBuilder.h Vulkan/Renderer/Renderer.h)
+set(HEADER_FILES Core/Core.h Core/Serialization.h Core/Window.h Core/UserInterface.h Vulkan/Features.h Vulkan/ApplicationBuilder.h Vulkan/Swapchain.h Vulkan/Application.h Vulkan/ApplicationState.h Vulkan/Renderer/ResourceManager.h Vulkan/Renderer/DescriptorSet.h Vulkan/Renderer/ShaderLibrary.h Vulkan/Renderer/PipelineLibrary.h Vulkan/Renderer/RenderPass.h Vulkan/Renderer/FrameGraph.h Vulkan/Renderer/FrameGraphBuilder.h Vulkan/Renderer/Renderer.h)
 
-set(SOURCE_FILES Core/Window.cpp Core/UserInterface.cpp Vulkan/Features.cpp Vulkan/ApplicationBuilder.cpp Vulkan/Swapchain.cpp Vulkan/Application.cpp Vulkan/ApplicationState.cpp Vulkan/Renderer/ResourceManager.cpp Vulkan/Renderer/DescriptorSet.cpp Vulkan/Renderer/ShaderLibrary.cpp Vulkan/Renderer/FrameGraph.cpp Vulkan/Renderer/FrameGraphBuilder.cpp Vulkan/Renderer/Renderer.cpp)
+set(SOURCE_FILES Core/Window.cpp Core/UserInterface.cpp Vulkan/Features.cpp Vulkan/ApplicationBuilder.cpp Vulkan/Swapchain.cpp Vulkan/Application.cpp Vulkan/ApplicationState.cpp Vulkan/Renderer/ResourceManager.cpp Vulkan/Renderer/DescriptorSet.cpp Vulkan/Renderer/ShaderLibrary.cpp Vulkan/Renderer/PipelineLibrary.cpp Vulkan/Renderer/FrameGraph.cpp Vulkan/Renderer/FrameGraphBuilder.cpp Vulkan/Renderer/Renderer.cpp)
 
 add_library(ref ${HEADER_FILES} ${SOURCE_FILES})
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} PREFIX "Header Files" FILES ${HEADER_FILES})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} PREFIX "Source Files" FILES ${SOURCE_FILES})
 
-target_include_directories(ref PUBLIC ${CMAKE_SOURCE_DIR}/ref)
+target_include_directories(ref PUBLIC ${PROJECT_SOURCE_DIR}/ref)
 
 target_compile_definitions(ref PRIVATE
     $<$<CONFIG:Release>:REF_CONFIG_RELEASE>

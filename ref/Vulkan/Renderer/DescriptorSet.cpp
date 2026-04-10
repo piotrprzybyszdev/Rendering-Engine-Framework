@@ -2,6 +2,8 @@
 
 #include "DescriptorSet.h"
 
+#include <ranges>
+
 namespace ref::vulkan
 {
 
@@ -110,7 +112,7 @@ DescriptorSetBuilder::DescriptorSetBuilder(DescriptorSetBuilder &&descriptorSetB
     : m_LogicalDevice(std::move(descriptorSetBuilder.m_LogicalDevice)),
       m_Bindings(std::move(descriptorSetBuilder.m_Bindings)),
       m_Types(std::move(descriptorSetBuilder.m_Types)), m_Flags(std::move(descriptorSetBuilder.m_Flags)),
-      m_Layout(std::move(descriptorSetBuilder.m_Layout))
+      m_IsUsed(std::move(descriptorSetBuilder.m_IsUsed)), m_Layout(std::move(descriptorSetBuilder.m_Layout))
 {
     descriptorSetBuilder.m_LogicalDevice = nullptr;
 }
@@ -123,6 +125,7 @@ DescriptorSetBuilder &vulkan::DescriptorSetBuilder::operator=(
     m_Bindings = std::move(descriptorSetBuilder.m_Bindings);
     m_Types = std::move(descriptorSetBuilder.m_Types);
     m_Flags = std::move(descriptorSetBuilder.m_Flags);
+    m_IsUsed = std::move(descriptorSetBuilder.m_IsUsed);
     m_Layout = std::move(descriptorSetBuilder.m_Layout);
 
     descriptorSetBuilder.m_LogicalDevice = nullptr;
@@ -154,6 +157,24 @@ DescriptorSetBuilder &DescriptorSetBuilder::SetDescriptor(
     return *this;
 }
 
+int32_t DescriptorSetBuilder::GetMaxBinding() const
+{
+    if (m_IsUsed.empty())
+        return -1;
+    return static_cast<uint32_t>(m_IsUsed.size() - 1);
+}
+
+bool DescriptorSetBuilder::HasBinding(uint32_t binding) const
+{
+    return m_IsUsed.size() > binding && m_IsUsed[binding];
+}
+
+const vk::DescriptorSetLayoutBinding &DescriptorSetBuilder::GetBinding(uint32_t binding) const
+{
+    assert(m_IsUsed[binding]);
+    return m_Bindings[binding];
+}
+
 vk::DescriptorSetLayout DescriptorSetBuilder::CreateLayout()
 {
     std::vector<vk::DescriptorBindingFlags> usedFlags;
@@ -180,8 +201,9 @@ std::unique_ptr<DescriptorSet> DescriptorSetBuilder::CreateSetUnique(uint32_t fr
 {
     std::vector<vk::DescriptorPoolSize> poolSizes = {};
     poolSizes.reserve(m_Types.size());
-    for (const auto &binding : m_Bindings)
-        poolSizes.emplace_back(binding.descriptorType, binding.descriptorCount * framesInFlight);
+    for (const auto &[binding, isUsed] : std::views::zip(m_Bindings, m_IsUsed))
+        if (isUsed)
+            poolSizes.emplace_back(binding.descriptorType, binding.descriptorCount * framesInFlight);
 
     vk::DescriptorPoolCreateInfo poolCreateInfo(vk::DescriptorPoolCreateFlags(), framesInFlight, poolSizes);
     auto pool = m_LogicalDevice.createDescriptorPool(poolCreateInfo);

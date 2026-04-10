@@ -3,6 +3,7 @@ BasedOnStyle: Microsoft
 AccessModifierOffset: -4
 AlignAfterOpenBracket: BlockIndent
 AllowShortBlocksOnASingleLine: Empty
+AllowShortFunctionsOnASingleLine: Empty
 BraceWrapping:
   AfterCaseLabel: true
   AfterClass: true

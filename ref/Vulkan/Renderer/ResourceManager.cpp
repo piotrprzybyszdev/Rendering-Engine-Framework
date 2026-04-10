@@ -84,7 +84,7 @@ void ResourceAllocator::AllocateResource(BufferResourceId id, vk::BufferCreateIn
     buffer.IsDevice = isDevice;
 
     Application::GetInstance()->SetDebugName(buffer.Handle, buffer.Name.c_str());
-    logger::debug("Allocating buffer resource `{}`", buffer.Name);
+    logger::trace("Allocating buffer resource `{}`", buffer.Name);
 }
 
 void ResourceAllocator::AllocateResource(ImageResourceId id, vk::ImageCreateInfo info, bool isDevice)
@@ -109,7 +109,7 @@ void ResourceAllocator::AllocateResource(ImageResourceId id, vk::ImageCreateInfo
     image.IsDevice = isDevice;
 
     Application::GetInstance()->SetDebugName(image.Handle, image.Name.c_str());
-    logger::debug("Allocating image resource `{}`", image.Name);
+    logger::trace("Allocating image resource `{}`", image.Name);
 }
 
 void ResourceAllocator::AllocateResource(ImageViewResourceId id, vk::ImageViewCreateInfo info)
@@ -122,7 +122,7 @@ void ResourceAllocator::AllocateResource(ImageViewResourceId id, vk::ImageViewCr
     view.Handle = handle;
 
     Application::GetInstance()->SetDebugName(view.Handle, view.Name.c_str());
-    logger::debug("Allocating image view resource `{}`", view.Name);
+    logger::trace("Allocating image view resource `{}`", view.Name);
 }
 
 const BufferResource &ResourceAllocator::GetBufferResource(BufferResourceId id) const

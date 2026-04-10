@@ -12,7 +12,8 @@ namespace logger = spdlog;
 template<typename T, typename P, T Sentinel = std::numeric_limits<T>::max()> struct IdType
 {
     IdType() = default;
-    IdType(T value) : Value(value)
+
+    explicit IdType(T value) : Value(value)
     {
         assert(value != Sentinel);
     }
@@ -21,6 +22,11 @@ template<typename T, typename P, T Sentinel = std::numeric_limits<T>::max()> str
     {
         assert(Value != Sentinel);
         return Value;
+    }
+
+    bool IsValid() const
+    {
+        return Value != Sentinel;
     }
 
     T Value = Sentinel;

@@ -29,14 +29,6 @@ Application::Application(ApplicationSpec &&spec)
     for (const auto &[name, queue] : spec.Queues)
         SetDebugName(queue.Handle, name);
 
-    m_SwapchainBuilder.SetUsageFlags(
-        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst
-    );
-    m_SwapchainBuilder.SetPresentMode(vk::PresentModeKHR::eFifo);
-    m_SwapchainBuilder.SetImageCount(std::clamp(2u, m_SwapchainBuilder.GetMinImageCount(), m_SwapchainBuilder.GetMaxImageCount()));
-    m_SwapchainBuilder.SetSurfaceFormat(
-        vk::SurfaceFormatKHR(vk::Format::eR8G8B8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear)
-    );
     m_SwapchainBuilder.SetPresentQueueFamilies({ m_MainQueue.FamilyIndex });
     vk::Extent2D extent;
     std::tie(extent.width, extent.height) = m_Window->GetSize();
@@ -61,8 +53,18 @@ Application::Application(ApplicationSpec &&spec)
 
 Application::~Application()
 {
-    m_ShaderLibrary->WriteShaderCache();
+    m_ShaderLibrary->WriteShaderCaches();
     s_Instance = nullptr;
+}
+
+ShaderLibrary &Application::GetShaderLibrary()
+{
+    return *m_ShaderLibrary.get();
+}
+
+PipelineLibrary &Application::GetPipelineLibrary()
+{
+    return *m_PipelineLibrary.get();
 }
 
 const ApplicationStateSpec &Application::GetApplicationStateSpec()
@@ -73,6 +75,7 @@ const ApplicationStateSpec &Application::GetApplicationStateSpec()
 void Application::Run(const std::string &state)
 {
     m_CurrentState = m_NextState = m_States.at(state).get();
+    m_CurrentStateName = m_NextStateName = state;
     m_CurrentState->OnEnter(nullptr);
 
     auto time = std::chrono::steady_clock::now();
@@ -92,6 +95,25 @@ void Application::Run(const std::string &state)
             continue;
         }
 
+        uint32_t tries = 5;
+        while (m_CurrentState != m_NextState)
+        {
+            logger::debug("Transitioning from state `{}` to state `{}`", m_CurrentStateName, m_NextStateName);
+            m_CurrentStateName = m_NextStateName;
+            m_CurrentState = m_NextState;
+            m_CurrentState->OnExit(m_NextState);
+            m_NextState->OnEnter(m_CurrentState);
+
+            if (--tries == 0)
+            {
+                logger::critical("Application state transition failed 5 times");
+                break;
+            }
+
+            if (m_CurrentState == m_NextState && m_Swapchain != nullptr)
+                m_CurrentState->OnResize(m_Swapchain.get());
+        }
+
         auto [width, height] = m_Window->GetSize();
         if (m_Swapchain == nullptr || m_RecreateSwapchain ||
             m_Swapchain->GetExtent() != vk::Extent2D(width, height))
@@ -109,20 +131,6 @@ void Application::Run(const std::string &state)
 
         m_CurrentState->OnUpdate(timeStep);
 
-        while (m_CurrentState != m_NextState)
-        {
-            m_CurrentState->OnExit(m_NextState);
-            m_NextState->OnEnter(m_CurrentState);
-            m_CurrentState = m_NextState;
-            if (m_RecreateSwapchain)
-                break;
-            m_CurrentState->OnResize(m_Swapchain.get());
-            m_CurrentState->OnUpdate(timeStep);
-        }
-
-        if (m_RecreateSwapchain)
-            continue;
-
         m_CurrentState->OnRender();
 
         m_Swapchain->Present(m_MainQueue.Handle);
@@ -138,6 +146,7 @@ void Application::AddState(const std::string &name, std::unique_ptr<ApplicationS
 
 void Application::SetNextState(const std::string &name)
 {
+    m_NextStateName = name;
     m_NextState = m_States.at(name).get();
 }
 

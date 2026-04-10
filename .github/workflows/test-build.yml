@@ -11,7 +11,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [windows-2025-vs2026, ubuntu-latest, macos-latest]
+        os: [windows-latest, ubuntu-latest, macos-latest]
         build_type: [Debug, Release]
 
     steps:
@@ -24,14 +24,14 @@ jobs:
       run: sudo apt-get update && sudo apt install libwayland-dev libxkbcommon-dev xorg-dev
 
     - name: Install Vulkan SDK Windows
-      uses: jakoch/install-vulkan-sdk-action@v1.4.0
-      if: matrix.os == 'windows-2025-vs2026'
+      uses: jakoch/install-vulkan-sdk-action@v1
+      if: matrix.os == 'windows-latest'
       with:
         optional_components: com.lunarg.vulkan.debug
 
     - name: Install Vulkan SDK
-      uses: jakoch/install-vulkan-sdk-action@v1.4.0
-      if: matrix.os != 'windows-2025-vs2026'
+      uses: jakoch/install-vulkan-sdk-action@v1
+      if: matrix.os != 'windows-latest'
 
     - name: Configure CMake
       run: cmake -S ${{github.workspace}} -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{matrix.build_type}}

@@ -1,26 +1,12 @@
 #include <imgui.h>
 
-#include "Vulkan/Application.h"
-#include "Vulkan/Renderer/FrameGraphBuilder.h"
+#include <Vulkan/Application.h>
+#include <Vulkan/Renderer/FrameGraphBuilder.h>
 
 #include "DemoApplicationStates.h"
 
 namespace ref::vulkan
 {
-
-DemoUserInterfaceState::DemoUserInterfaceState(const std::string &state)
-{
-    s_DemoStates.insert(state);
-}
-
-void DemoUserInterfaceState::OnInit()
-{
-    ImGui::StyleColorsDark();
-}
-
-void DemoUserInterfaceState::OnShutdown()
-{
-}
 
 void DemoUserInterfaceState::OnUpdate(float /* timeStep */)
 {
@@ -37,14 +23,68 @@ void DemoUserInterfaceState::OnUpdate(float /* timeStep */)
     ImGui::End();
 }
 
-void DemoUserInterfaceState::OnKeyRelease(Key /* key */)
+void DemoUserInterfaceState::AddState(const std::string &name)
 {
+    s_DemoStates.insert(name);
 }
 
-ComputeApplicationState::ComputeApplicationState(const ApplicationStateSpec &spec)
-    : m_MainQueue(spec.Queues.at(Application::MainQueueName)), m_ShaderLibrary(spec.ShaderLibrary),
-      m_PipelineLibrary(spec.PipelineLibrary), m_SwapchainBuilder(spec.SwapchainBuilder)
+namespace
 {
+
+vk::Format GetUnormFormat(vk::Format format)
+{
+    switch (format)
+    {
+    case vk::Format::eR8G8B8A8Srgb:
+        return vk::Format::eR8G8B8A8Unorm;
+    case vk::Format::eB8G8R8A8Srgb:
+        return vk::Format::eB8G8R8A8Unorm;
+    default:
+        return format;
+    }
+}
+
+vk::Format GetSurfaceFormat(SwapchainBuilder* swapchainBuilder)
+{
+    bool hasRGBA = false, hasBGRA = false;
+    for (const auto& format : swapchainBuilder->GetSurfaceFormats())
+    {
+        if (format.format == vk::Format::eUndefined)
+            return vk::Format::eR8G8B8A8Unorm;
+
+        if (format.colorSpace != vk::ColorSpaceKHR::eSrgbNonlinear)
+            continue;
+
+        if (format.format == vk::Format::eR8G8B8A8Unorm)
+            hasRGBA = true;
+        if (format.format == vk::Format::eB8G8R8A8Unorm)
+            hasBGRA = true;
+    }
+
+    if (hasRGBA)
+        return vk::Format::eR8G8B8A8Unorm;
+    if (hasBGRA)
+        return vk::Format::eB8G8R8A8Unorm;
+
+    return vk::Format::eUndefined;
+}
+
+uint32_t GetImageCount(SwapchainBuilder* swapchainBuilder, uint32_t imageCount)
+{
+    return std::clamp(imageCount, swapchainBuilder->GetMinImageCount(), swapchainBuilder->GetMaxImageCount());
+}
+
+}
+
+DemoApplicationState::DemoApplicationState(const std::string &state) : m_State(state)
+{
+    DemoUserInterfaceState::AddState(m_State);
+}
+
+void DemoApplicationState::OnEnter(ApplicationState * /* previous */)
+{
+    const ApplicationStateSpec &spec = Application::GetInstance()->GetApplicationStateSpec();
+
     ResourceManagerSpec resourceManagerSpec = {
         .ApiVersion = spec.ApiVersion,
         .Instance = spec.Instance,
@@ -54,39 +94,164 @@ ComputeApplicationState::ComputeApplicationState(const ApplicationStateSpec &spe
 
     m_ResourceAllocator = std::make_unique<ResourceAllocator>(resourceManagerSpec);
 
+    const Queue &mainQueue = spec.Queues.at(Application::MainQueueName);
     UserInterfaceVulkanSpec userInterfaceSpec = {
         .Window = spec.ApplicationWindow->GetHandle(),
         .ApiVersion = spec.ApiVersion,
         .Instance = spec.Instance,
         .PhysicalDevice = spec.PhysicalDevice,
         .LogicalDevice = spec.LogicalDevice,
-        .QueueFamilyIndex = m_MainQueue.FamilyIndex,
-        .Queue = m_MainQueue.Handle,
-        .ImageCount = 2,
-        .ImageFormat = vk::Format::eR8G8B8A8Unorm,
+        .QueueFamilyIndex = mainQueue.FamilyIndex,
+        .Queue = mainQueue.Handle,
+        .ImageCount = m_SwapchainImageCount,
+        .ImageFormat = GetUnormFormat(m_SwapchainFormat.format),
     };
 
-    m_UserInterface = std::make_unique<UserInterface>(
-        userInterfaceSpec, std::make_unique<DemoUserInterfaceState>("Compute Demo State")
-    );
+    m_UserInterfaceState = std::make_unique<DemoUserInterfaceState>();
+    m_UserInterface = std::make_unique<UserInterface>(userInterfaceSpec, *m_UserInterfaceState);
 
-    m_ShaderId = m_ShaderLibrary->AddShader(
-        ShaderInfo("Shaders/gradient.comp", "main", vk::ShaderStageFlagBits::eCompute)
-    );
+    spec.SwapchainBuilder->SetSurfaceFormat(m_SwapchainFormat);
+    spec.SwapchainBuilder->SetUsageFlags(m_SwapchainUsageFlags);
+    spec.SwapchainBuilder->SetImageCount(m_SwapchainImageCount);
+    Application::GetInstance()->SetRecreateSwapchain();
+}
 
-    m_ShaderLibrary->LoadShader(m_ShaderId);
-    m_PipelineId = m_PipelineLibrary->AddPipeline(ComputePipelineInfo("Shader Toy Pipeline", m_ShaderId));
-    m_PipelineLibrary->CompilePipeline(m_PipelineId);
+void DemoApplicationState::OnExit(ApplicationState * /* next */)
+{
+    m_Renderer.reset();
+    m_FrameGraph.reset();
+    m_UserInterface.reset();
+    m_UserInterfaceState.reset();
+    m_ResourceAllocator.reset();
+}
+
+void DemoApplicationState::SetDefaultSwapchain()
+{
+    const auto &swapchainBuilder = Application::GetInstance()->GetApplicationStateSpec().SwapchainBuilder;
+    swapchainBuilder->SetPresentMode(vk::PresentModeKHR::eFifo);
+    SetSwapchainUsageFlags(vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eColorAttachment);
+    SetSwapchainImageCount(GetImageCount(swapchainBuilder, 2u));
+    
+    vk::Format format = GetSurfaceFormat(swapchainBuilder);
+    if (format == vk::Format::eUndefined)
+    {
+        auto &errors = ErrorApplicationState::GetErrors();
+        errors.clear();
+        errors.push_back("Could not find any suitable swapchain formats");
+        ErrorApplicationState::SetErrorState(m_State);
+        return;
+    }
+
+    SetSwapchainFormat(format);
+}
+
+void DemoApplicationState::SetSwapchainFormat(vk::SurfaceFormatKHR format)
+{
+    m_SwapchainFormat = format;
+}
+
+void DemoApplicationState::SetSwapchainUsageFlags(vk::ImageUsageFlags usageFlags)
+{
+    m_SwapchainUsageFlags = usageFlags;
+}
+
+void DemoApplicationState::SetSwapchainImageCount(uint32_t imageCount)
+{
+    m_SwapchainImageCount = imageCount;
+}
+
+bool DemoApplicationState::EnsurePipelinesCompiled(std::initializer_list<ComputePipelineInstanceId> pipelines)
+{
+    PipelineLibrary &pipelineLibrary = Application::GetInstance()->GetPipelineLibrary();
+
+    bool success = true;
+    for (auto id : pipelines)
+        success &= pipelineLibrary.CompilePipelineInstance(id);
+
+    if (!success)
+        SetShaderErrors();
+
+    return success;
+}
+
+bool DemoApplicationState::EnsurePipelinesCompiled(std::initializer_list<GraphicsPipelineInstanceId> pipelines)
+{
+    PipelineLibrary &pipelineLibrary = Application::GetInstance()->GetPipelineLibrary();
+
+    bool success = true;
+    for (auto id : pipelines)
+        success &= pipelineLibrary.CompilePipelineInstance(id);
+
+    if (!success)
+        SetShaderErrors();
+
+    return success;
+}
+
+void DemoApplicationState::SetShaderErrors()
+{
+    ShaderLibrary &shaderLibrary = Application::GetInstance()->GetShaderLibrary();
+    auto &errors = ErrorApplicationState::GetErrors();
+    errors.clear();
+    for (auto &failure : shaderLibrary.GetCompilationFailedShaders())
+        errors.push_back(failure.Error);
+    ErrorApplicationState::SetErrorState(m_State);
+}
+
+ComputeApplicationState::ComputeApplicationState(const ApplicationStateSpec &spec)
+    : DemoApplicationState("Compute Demo State"), m_LogicalDevice(spec.LogicalDevice),
+      m_MainQueue(spec.Queues.at(Application::MainQueueName)), m_ShaderLibrary(spec.ShaderLibrary),
+      m_PipelineLibrary(spec.PipelineLibrary)
+{
+    m_ShaderId = m_ShaderLibrary->GetShaderByPath("Shaders/gradient.comp");
+
+    {
+        auto pipeline =
+            m_PipelineLibrary->AddPipeline(ComputePipelineInfo("Shader Toy Pipeline", m_ShaderId));
+        ComputePipelineInstanceInfo pipelineInstanceInfo("Shader Toy Pipeline Instance", pipeline);
+        AddSpecializationConstant(pipelineInstanceInfo, 0, 1.0f);
+        m_PipelineId = m_PipelineLibrary->AddPipelineInstance(pipelineInstanceInfo);
+    }
+}
+
+ComputeApplicationState::~ComputeApplicationState() {}
+
+void ComputeApplicationState::OnEnter(ApplicationState *previous)
+{
+    SetDefaultSwapchain();
+    SetSwapchainUsageFlags(
+        vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst |
+        vk::ImageUsageFlagBits::eColorAttachment
+    );
+    DemoApplicationState::OnEnter(previous);
+    if (!DemoApplicationState::EnsurePipelinesCompiled({ m_PipelineId }))
+        return;
+
+    m_Time = 0.0f;
+    bool success = m_PipelineLibrary->CompilePipelineInstance(m_PipelineId);
+    if (!success)
+    {
+        auto &errors = ErrorApplicationState::GetErrors();
+        errors.clear();
+        for (auto &failure : m_ShaderLibrary->GetCompilationFailedShaders())
+            errors.push_back(failure.Error);
+        ErrorApplicationState::SetErrorState("Compute Demo State");
+        return;
+    }
 
     FrameGraphBuilder builder;
 
     {
         ComputePassSpec passSpec = {
             .Pipeline = m_PipelineId,
-            .PushConstantData = std::as_bytes(std::span(&m_Time, 1)),
             .ImageBindings = {
                 { FrameGraph::g_SwapchainImageResourceName, 0, nullptr, false, true },
             },
+            .Dispatches = {
+                {
+                    .PushConstantData = std::as_bytes(std::span(&m_Time, 1)),
+                }
+            }
         };
         builder.AddComputePass("Compute Pass", passSpec);
     }
@@ -108,49 +273,25 @@ ComputeApplicationState::ComputeApplicationState(const ApplicationStateSpec &spe
     m_FrameGraph = builder.CreateUnique(m_PipelineLibrary, m_ResourceAllocator.get());
 
     RendererSpec rendererSpec = {
-        .LogicalDevice = spec.LogicalDevice,
+        .LogicalDevice = m_LogicalDevice,
         .MainQueue = m_MainQueue,
         .FrameGraph = m_FrameGraph.get(),
+        .ResourceAllocator = m_ResourceAllocator.get(),
     };
 
     m_Renderer = std::make_unique<Renderer>(rendererSpec);
 }
 
-ComputeApplicationState::~ComputeApplicationState()
+void ComputeApplicationState::OnExit(ApplicationState *next)
 {
-}
-
-void ComputeApplicationState::OnEnter(ApplicationState * /* previous */)
-{
-    m_SwapchainBuilder->SetUsageFlags(
-        vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eColorAttachment |
-        vk::ImageUsageFlagBits::eTransferDst
-    );
-    Application::GetInstance()->SetRecreateSwapchain();
-
-    m_Time = 0.0f;
-    m_ShaderLibrary->LoadShader(m_ShaderId);
-    bool success = m_PipelineLibrary->CompilePipeline(m_PipelineId);
-    if (!success)
-    {
-        auto &errors = ErrorApplicationState::GetErrors();
-        errors.clear();
-        for (auto &failure : m_ShaderLibrary->GetCompilationFailedShaders())
-            errors.push_back(failure.Error);
-        ErrorApplicationState::SetErrorState("Compute Demo State");
-        return;
-    }
-}
-
-void ComputeApplicationState::OnExit(ApplicationState * /* next */)
-{
+    DemoApplicationState::OnExit(next);
 }
 
 void ComputeApplicationState::OnResize(const Swapchain *swapchain)
 {
     m_Renderer->OnResize(swapchain);
 
-    m_FrameGraph->GetComputePassDynamicConfig("Compute Pass").GetDispatchCommand() = {
+    m_FrameGraph->GetComputePassDynamicConfig("Compute Pass").GetDispatchCommand().front().Command = {
         static_cast<uint32_t>(std::ceil(swapchain->GetExtent().width / 8.)),
         static_cast<uint32_t>(std::ceil(swapchain->GetExtent().height / 8.)), 1u
     };
@@ -170,8 +311,7 @@ void ComputeApplicationState::OnUpdate(float timeStep)
     if (m_Time > 5.0f)
     {
         m_Time -= 5.0f;
-        m_ShaderLibrary->LoadShader(m_ShaderId);
-        bool success = m_PipelineLibrary->CompilePipeline(m_PipelineId);
+        bool success = m_PipelineLibrary->CompilePipelineInstance(m_PipelineId);
         if (!success)
         {
             auto &errors = ErrorApplicationState::GetErrors();
@@ -190,32 +330,51 @@ void ComputeApplicationState::OnRender()
 }
 
 TriangleApplicationState::TriangleApplicationState(const ApplicationStateSpec &spec)
-    : m_MainQueue(spec.Queues.at(Application::MainQueueName))
+    : DemoApplicationState("Triangle Demo State"), m_LogicalDevice(spec.LogicalDevice),
+      m_MainQueue(spec.Queues.at(Application::MainQueueName)),
+      m_PipelineLibrary(spec.PipelineLibrary)
 {
-    ResourceManagerSpec resourceManagerSpec = {
-        .ApiVersion = spec.ApiVersion,
-        .Instance = spec.Instance,
-        .PhysicalDevice = spec.PhysicalDevice,
-        .LogicalDevice = spec.LogicalDevice,
+    ShaderId vertexShader = spec.ShaderLibrary->GetShaderByPath("Shaders/posColor.vert");
+    ShaderId fragmentShader = spec.ShaderLibrary->GetShaderByPath("Shaders/color.frag");
+
+    struct Vertex
+    {
+        float Position[4];
+        float Color[4];
     };
 
-    m_ResourceAllocator = std::make_unique<ResourceAllocator>(resourceManagerSpec);
+    {
+        GraphicsPipelineInfo pipelineInfo = {
+            .Name = "Triangle Pipeline",
+            .VertexShaderId = vertexShader,
+            .FragmentShaderId = fragmentShader,
+        };
 
-    UserInterfaceVulkanSpec userInterfaceSpec = {
-        .Window = spec.ApplicationWindow->GetHandle(),
-        .ApiVersion = spec.ApiVersion,
-        .Instance = spec.Instance,
-        .PhysicalDevice = spec.PhysicalDevice,
-        .LogicalDevice = spec.LogicalDevice,
-        .QueueFamilyIndex = m_MainQueue.FamilyIndex,
-        .Queue = m_MainQueue.Handle,
-        .ImageCount = 2,
-        .ImageFormat = vk::Format::eR8G8B8A8Unorm,
-    };
+        auto pipelineId = spec.PipelineLibrary->AddPipeline(pipelineInfo);
 
-    m_UserInterface = std::make_unique<UserInterface>(
-        userInterfaceSpec, std::make_unique<DemoUserInterfaceState>("Triangle Demo State")
-    );
+        GraphicsPipelineInstanceInfo pipelineInstanceInfo = {
+            .Name = "Triangle Pipeline Instance",
+            .PipelineId = pipelineId,
+            .BindingDescriptions = { vk::VertexInputBindingDescription(0, sizeof(Vertex)) },
+            .VertexInputs = { { 0, offsetof(Vertex, Position) }, { 0, offsetof(Vertex, Color) } },
+            .ColorAttachmentFormats = { vk::Format::eR8G8B8A8Unorm },
+        };
+        pipelineInstanceInfo.InputAssemblyState.setTopology(vk::PrimitiveTopology::eTriangleList);
+        pipelineInstanceInfo.RasterizationState.setLineWidth(1.0f);
+        pipelineInstanceInfo.AttachmentBlendStates.emplace_back().setColorWriteMask(
+            vk::FlagTraits<vk::ColorComponentFlagBits>::allFlags
+        );
+
+        m_TrianglePiplineId = spec.PipelineLibrary->AddPipelineInstance(pipelineInstanceInfo);
+    }
+}
+
+void TriangleApplicationState::OnEnter(ApplicationState *previous)
+{
+    SetDefaultSwapchain();
+    DemoApplicationState::OnEnter(previous);
+    if (!DemoApplicationState::EnsurePipelinesCompiled({ m_TrianglePiplineId }))
+        return;
 
     FrameGraphBuilder builder;
 
@@ -233,51 +392,25 @@ TriangleApplicationState::TriangleApplicationState(const ApplicationStateSpec &s
 
     std::array<uint32_t, 3> indices = { 0, 1, 2 };
 
-    builder.AddHostBuffer(
+    builder.AddDeviceBuffer(
         "Vertex Buffer",
         vk::BufferCreateInfo()
             .setSize(std::span(vertices).size_bytes())
-            .setUsage(vk::BufferUsageFlagBits::eVertexBuffer),
-        false
+            .setUsage(vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer),
+        false, true
     );
 
-    builder.AddHostBuffer(
+    builder.AddDeviceBuffer(
         "Index Buffer",
         vk::BufferCreateInfo()
             .setSize(std::span(indices).size_bytes())
-            .setUsage(vk::BufferUsageFlagBits::eIndexBuffer),
-        false
+            .setUsage(vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer),
+        false, true
     );
-
-    ShaderId vertexShader = spec.ShaderLibrary->AddShader(
-        ShaderInfo("Shaders/posColor.vert", "main", vk::ShaderStageFlagBits::eVertex)
-    );
-    ShaderId fragmentShader = spec.ShaderLibrary->AddShader(
-        ShaderInfo("Shaders/color.frag", "main", vk::ShaderStageFlagBits::eFragment)
-    );
-
-    GraphicsPipelineId pipelineId;
-    {
-        GraphicsPipelineInfo pipelineInfo = {
-            .Name = "Triangle Pipeline",
-            .VertexShaderId = vertexShader,
-            .FragmentShaderId = fragmentShader,
-            .BindingDescriptions = { vk::VertexInputBindingDescription(0, sizeof(Vertex)) },
-            .VertexInputs = { { 0, offsetof(Vertex, Position) }, { 0, offsetof(Vertex, Color) } },
-            .ColorAttachmentFormats = { vk::Format::eR8G8B8A8Unorm },
-        };
-        pipelineInfo.InputAssemblyState.setTopology(vk::PrimitiveTopology::eTriangleList);
-        pipelineInfo.RasterizationState.setLineWidth(1.0f);
-        pipelineInfo.AttachmentBlendStates.emplace_back().setColorWriteMask(
-            vk::FlagTraits<vk::ColorComponentFlagBits>::allFlags
-        );
-
-        pipelineId = spec.PipelineLibrary->AddPipeline(pipelineInfo);
-    }
 
     {
         GraphicsPassSpec passSpec = {
-            .Pipeline = pipelineId,
+            .Pipeline = m_TrianglePiplineId,
             .VertexBuffers = {
                 .VertexBuffers = { { "Vertex Buffer" } },
             },
@@ -288,11 +421,15 @@ TriangleApplicationState::TriangleApplicationState(const ApplicationStateSpec &s
                     .ClearValue = vk::ClearColorValue(0.0f, 0.0f, 1.0f, 1.0f),
                 },
             },
-            .Command = { 
-                .VertexCount = 3,
-                .InstanceCount = 1,
-                .FirstVertex = 0,
-                .FirstInstance = 0,
+            .Draws = {
+                {
+                    .Command = {
+                        .VertexCount = 3,
+                        .InstanceCount = 1,
+                        .FirstVertex = 0,
+                        .FirstInstance = 0,
+                    }
+                }
             },
         };
         builder.AddGraphicsPass("Graphics Pass", passSpec);
@@ -312,30 +449,27 @@ TriangleApplicationState::TriangleApplicationState(const ApplicationStateSpec &s
         builder.AddCustomGraphicsPass("UI Pass", passSpec);
     }
 
-    m_FrameGraph = builder.CreateUnique(spec.PipelineLibrary, m_ResourceAllocator.get());
-
-    spec.ShaderLibrary->LoadShader(vertexShader);
-    spec.ShaderLibrary->LoadShader(fragmentShader);
-    [[maybe_unused]] bool success = spec.PipelineLibrary->CompilePipeline(pipelineId);
-    assert(success == true);
+    m_FrameGraph = builder.CreateUnique(m_PipelineLibrary, m_ResourceAllocator.get());
 
     auto v = std::span(vertices);
     auto i = std::span(indices);
 
-    m_ResourceAllocator->UploadToBuffer(
-        m_FrameGraph->GetBuffer("Vertex Buffer").front(), v.data(), v.size_bytes()
-    );
-    m_ResourceAllocator->UploadToBuffer(
-        m_FrameGraph->GetBuffer("Index Buffer").front(), i.data(), i.size_bytes()
-    );
-
     RendererSpec rendererSpec = {
-        .LogicalDevice = spec.LogicalDevice,
+        .LogicalDevice = m_LogicalDevice,
         .MainQueue = m_MainQueue,
         .FrameGraph = m_FrameGraph.get(),
+        .ResourceAllocator = m_ResourceAllocator.get(),
     };
 
     m_Renderer = std::make_unique<Renderer>(rendererSpec);
+
+    m_Renderer->UploadWithStaging(m_FrameGraph->GetBuffer("Vertex Buffer").front(), std::as_bytes(v));
+    m_Renderer->UploadWithStaging(m_FrameGraph->GetBuffer("Index Buffer").front(), std::as_bytes(i));
+}
+
+void TriangleApplicationState::OnExit(ApplicationState *next)
+{
+    DemoApplicationState::OnExit(next);
 }
 
 void TriangleApplicationState::OnResize(const Swapchain *swapchain)
@@ -368,32 +502,64 @@ void TriangleApplicationState::OnRender()
 }
 
 ParticleApplicationState::ParticleApplicationState(const ApplicationStateSpec &spec)
-    : m_MainQueue(spec.Queues.at(Application::MainQueueName))
+    : DemoApplicationState("Particle Demo State"), m_LogicalDevice(spec.LogicalDevice),
+      m_MainQueue(spec.Queues.at(Application::MainQueueName)),
+      m_PipelineLibrary(spec.PipelineLibrary)
 {
-    ResourceManagerSpec resourceManagerSpec = {
-        .ApiVersion = spec.ApiVersion,
-        .Instance = spec.Instance,
-        .PhysicalDevice = spec.PhysicalDevice,
-        .LogicalDevice = spec.LogicalDevice,
+    struct Vertex
+    {
+        float Position[4];
     };
 
-    m_ResourceAllocator = std::make_unique<ResourceAllocator>(resourceManagerSpec);
-    
-    UserInterfaceVulkanSpec userInterfaceSpec = {
-        .Window = spec.ApplicationWindow->GetHandle(),
-        .ApiVersion = spec.ApiVersion,
-        .Instance = spec.Instance,
-        .PhysicalDevice = spec.PhysicalDevice,
-        .LogicalDevice = spec.LogicalDevice,
-        .QueueFamilyIndex = m_MainQueue.FamilyIndex,
-        .Queue = m_MainQueue.Handle,
-        .ImageCount = 2,
-        .ImageFormat = vk::Format::eR8G8B8A8Unorm,
-    };
+    ShaderId computeShader = spec.ShaderLibrary->GetShaderByPath("Shaders/particleDraw.comp");
+    ShaderId vertexShader = spec.ShaderLibrary->GetShaderByPath("Shaders/pos.vert");
+    ShaderId fragmentShader = spec.ShaderLibrary->GetShaderByPath("Shaders/color.frag");
 
-    m_UserInterface = std::make_unique<UserInterface>(
-        userInterfaceSpec, std::make_unique<DemoUserInterfaceState>("Particle Demo State")
-    );
+    {
+        GraphicsPipelineInfo pipelineInfo = {
+            .Name = "Particle Graphics Pipeline",
+            .VertexShaderId = vertexShader,
+            .FragmentShaderId = fragmentShader,
+        };
+
+        auto pipelineId = spec.PipelineLibrary->AddPipeline(pipelineInfo);
+
+        GraphicsPipelineInstanceInfo pipelineInstanceInfo = {
+            .Name = "Particle Graphics Pipeline Instance",
+            .PipelineId = pipelineId,
+            .BindingDescriptions = { vk::VertexInputBindingDescription(0, sizeof(Vertex)) },
+            .VertexInputs = { { 0, offsetof(Vertex, Position) } },
+            .ColorAttachmentFormats = { vk::Format::eR8G8B8A8Unorm },
+        };
+        pipelineInstanceInfo.InputAssemblyState.setTopology(vk::PrimitiveTopology::eTriangleList);
+        pipelineInstanceInfo.RasterizationState.setLineWidth(1.0f);
+        pipelineInstanceInfo.AttachmentBlendStates.emplace_back().setColorWriteMask(
+            vk::FlagTraits<vk::ColorComponentFlagBits>::allFlags
+        );
+
+        m_ParticlePipelineId = spec.PipelineLibrary->AddPipelineInstance(pipelineInstanceInfo);
+    }
+
+    {
+        ComputePipelineInfo pipelineInfo = { .Name = "Particle Compute Pipeline",
+                                             .ComputeShader = computeShader };
+        auto pipelineId = spec.PipelineLibrary->AddPipeline(pipelineInfo);
+        ComputePipelineInstanceInfo pipelineInstanceInfo = {
+            .Name = "Particle Compute Pipeline Instance",
+            .PipelineId = pipelineId,
+        };
+        m_ComputePipelineId = spec.PipelineLibrary->AddPipelineInstance(pipelineInstanceInfo);
+    }
+}
+
+void ParticleApplicationState::OnEnter(ApplicationState * previous)
+{
+    SetDefaultSwapchain();
+    DemoApplicationState::OnEnter(previous);
+    if (!DemoApplicationState::EnsurePipelinesCompiled({ m_ComputePipelineId }))
+        return;
+    if (!DemoApplicationState::EnsurePipelinesCompiled({ m_ParticlePipelineId }))
+        return;
 
     struct Vertex
     {
@@ -415,26 +581,26 @@ ParticleApplicationState::ParticleApplicationState(const ApplicationStateSpec &s
     std::array<uint32_t, 3> indices = { 0, 1, 2 };
 
     FrameGraphBuilder builder;
-    builder.AddHostBuffer(
+    builder.AddDeviceBuffer(
         "Vertex Buffer",
         vk::BufferCreateInfo()
             .setSize(std::span(vertices).size_bytes())
-            .setUsage(vk::BufferUsageFlagBits::eVertexBuffer),
-        false
+            .setUsage(vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer),
+        false, true
     );
-    builder.AddHostBuffer(
+    builder.AddDeviceBuffer(
         "Index Buffer",
         vk::BufferCreateInfo()
             .setSize(std::span(indices).size_bytes())
-            .setUsage(vk::BufferUsageFlagBits::eIndexBuffer),
-        false
+            .setUsage(vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer),
+        false, true
     );
     builder.AddDeviceBuffer(
         "Indirect Buffer",
         vk::BufferCreateInfo()
             .setSize(sizeof(vk::DrawIndexedIndirectCommand))
             .setUsage(vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eStorageBuffer),
-        true
+        true, false
     );
 
     builder.AddDeviceImage(
@@ -447,44 +613,8 @@ ParticleApplicationState::ParticleApplicationState(const ApplicationStateSpec &s
                 vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst |
                 vk::ImageUsageFlagBits::eColorAttachment
             ),
-        true
+        true, false
     );
-
-    ShaderId computeShader = spec.ShaderLibrary->AddShader(
-        ShaderInfo("Shaders/particleDraw.comp", "main", vk::ShaderStageFlagBits::eCompute)
-    );
-    ShaderId vertexShader = spec.ShaderLibrary->AddShader(
-        ShaderInfo("Shaders/pos.vert", "main", vk::ShaderStageFlagBits::eVertex)
-    );
-    ShaderId fragmentShader = spec.ShaderLibrary->AddShader(
-        ShaderInfo("Shaders/color.frag", "main", vk::ShaderStageFlagBits::eFragment)
-    );
-
-    GraphicsPipelineId particlePipelineId;
-    ComputePipelineId computePipelineId;
-    {
-        GraphicsPipelineInfo pipelineInfo = {
-            .Name = "Particle Graphics Pipeline",
-            .VertexShaderId = vertexShader,
-            .FragmentShaderId = fragmentShader,
-            .BindingDescriptions = { vk::VertexInputBindingDescription(0, sizeof(Vertex)) },
-            .VertexInputs = { { 0, offsetof(Vertex, Position) } },
-            .ColorAttachmentFormats = { vk::Format::eR8G8B8A8Unorm },
-        };
-        pipelineInfo.InputAssemblyState.setTopology(vk::PrimitiveTopology::eTriangleList);
-        pipelineInfo.RasterizationState.setLineWidth(1.0f);
-        pipelineInfo.AttachmentBlendStates.emplace_back().setColorWriteMask(
-            vk::FlagTraits<vk::ColorComponentFlagBits>::allFlags
-        );
-
-        particlePipelineId = spec.PipelineLibrary->AddPipeline(pipelineInfo);
-    }
-
-    {
-        ComputePipelineInfo pipelineInfo = { .Name = "Particle Compute Pipeline",
-                                             .ComputeShader = computeShader };
-        computePipelineId = spec.PipelineLibrary->AddPipeline(pipelineInfo);
-    }
 
     {
         ClearPassSpec clearSpec = {
@@ -496,26 +626,30 @@ ParticleApplicationState::ParticleApplicationState(const ApplicationStateSpec &s
 
     {
         ComputePassSpec computeSpec = {
-            .Pipeline = computePipelineId,
-            .PushConstantData = std::as_bytes(std::span(&m_ParticleIdx, 1)),
+            .Pipeline = m_ComputePipelineId,
             .BufferBindings = { BufferBinding("Indirect Buffer", 0, false, true) },
-            .Command = { 1, 1, 1 },
+            .Dispatches = { {
+                .Command = { 1, 1, 1 },
+                .PushConstantData = std::as_bytes(std::span(&m_ParticleIdx, 1)),
+            } }
         };
         builder.AddComputePass("Compute Pass", std::move(computeSpec));
     }
 
     {
         IndexedIndirectGraphicsPassSpec graphicsSpec = {
-            .Pipeline = particlePipelineId,
+            .Pipeline = m_ParticlePipelineId,
             .VertexBuffers = {
                 .VertexBuffers = { { "Vertex Buffer" } },
             },            
             .IndexBuffer = { "Index Buffer", 0, vk::IndexType::eUint32 },
             .ColorAttachments = { { "Image" } },
             .IndirectBufferResource = "Indirect Buffer",
-            .Command = {
-                .DrawCount = 1,
-            },
+            .Draws = { {
+                .Command = {
+                    .DrawCount = 1,
+                },
+            } }
         };
         builder.AddIndexedIndirectGraphicsPass("Graphics Pass", std::move(graphicsSpec));
     }
@@ -545,16 +679,7 @@ ParticleApplicationState::ParticleApplicationState(const ApplicationStateSpec &s
         builder.AddCustomGraphicsPass("UI Pass", passSpec);
     }
 
-    spec.ShaderLibrary->LoadShader(computeShader);
-    spec.ShaderLibrary->LoadShader(vertexShader);
-    spec.ShaderLibrary->LoadShader(fragmentShader);
-
-    [[maybe_unused]] bool success = spec.PipelineLibrary->CompilePipeline(particlePipelineId);
-    assert(success == true);
-    success = spec.PipelineLibrary->CompilePipeline(computePipelineId);
-    assert(success == true);
-
-    m_FrameGraph = builder.CreateUnique(spec.PipelineLibrary, m_ResourceAllocator.get());
+    m_FrameGraph = builder.CreateUnique(m_PipelineLibrary, m_ResourceAllocator.get());
 
     m_FrameGraph->GetClearPassDynamicConfig("Clear Pass").GetClearValue() =
         vk::ClearColorValue(0.0f, 0.0f, 1.0f, 1.0f);
@@ -562,20 +687,22 @@ ParticleApplicationState::ParticleApplicationState(const ApplicationStateSpec &s
     auto v = std::span(vertices);
     auto i = std::span(indices);
 
-    m_ResourceAllocator->UploadToBuffer(
-        m_FrameGraph->GetBuffer("Vertex Buffer").front(), v.data(), v.size_bytes()
-    );
-    m_ResourceAllocator->UploadToBuffer(
-        m_FrameGraph->GetBuffer("Index Buffer").front(), i.data(), i.size_bytes()
-    );
-
     RendererSpec rendererSpec = {
-        .LogicalDevice = spec.LogicalDevice,
+        .LogicalDevice = m_LogicalDevice,
         .MainQueue = m_MainQueue,
         .FrameGraph = m_FrameGraph.get(),
+        .ResourceAllocator = m_ResourceAllocator.get(),
     };
 
     m_Renderer = std::make_unique<Renderer>(rendererSpec);
+
+    m_Renderer->UploadWithStaging(m_FrameGraph->GetBuffer("Vertex Buffer").front(), std::as_bytes(v));
+    m_Renderer->UploadWithStaging(m_FrameGraph->GetBuffer("Index Buffer").front(), std::as_bytes(i));
+}
+
+void ParticleApplicationState::OnExit(ApplicationState *next)
+{
+    DemoApplicationState::OnExit(next);
 }
 
 void ParticleApplicationState::OnResize(const Swapchain *swapchain)
@@ -624,32 +751,87 @@ void ParticleApplicationState::OnRender()
 }
 
 CubeApplicationState::CubeApplicationState(const ApplicationStateSpec &spec)
-    : m_MainQueue(spec.Queues.at(Application::MainQueueName))
+    : DemoApplicationState("Cube Demo State"), m_LogicalDevice(spec.LogicalDevice),
+      m_MainQueue(spec.Queues.at(Application::MainQueueName)), m_PipelineLibrary(spec.PipelineLibrary)
 {
-    ResourceManagerSpec resourceManagerSpec = {
-        .ApiVersion = spec.ApiVersion,
-        .Instance = spec.Instance,
-        .PhysicalDevice = spec.PhysicalDevice,
-        .LogicalDevice = spec.LogicalDevice,
+    struct Vertex
+    {
+        float Position[4];
+        float Color[4];
     };
 
-    m_ResourceAllocator = std::make_unique<ResourceAllocator>(resourceManagerSpec);
+    ShaderId vertexShader = spec.ShaderLibrary->GetShaderByPath("Shaders/mvp.vert");
+    ShaderId fragmentShader = spec.ShaderLibrary->GetShaderByPath("Shaders/color.frag");
 
-    UserInterfaceVulkanSpec userInterfaceSpec = {
-        .Window = spec.ApplicationWindow->GetHandle(),
-        .ApiVersion = spec.ApiVersion,
-        .Instance = spec.Instance,
-        .PhysicalDevice = spec.PhysicalDevice,
-        .LogicalDevice = spec.LogicalDevice,
-        .QueueFamilyIndex = m_MainQueue.FamilyIndex,
-        .Queue = m_MainQueue.Handle,
-        .ImageCount = 2,
-        .ImageFormat = vk::Format::eR8G8B8A8Unorm,
-    };
+    {
+        GraphicsPipelineInfo pipelineInfo = {
+            .Name = "Cube Pipeline",
+            .VertexShaderId = vertexShader,
+            .FragmentShaderId = fragmentShader,
+        };
 
-    m_UserInterface = std::make_unique<UserInterface>(
-        userInterfaceSpec, std::make_unique<DemoUserInterfaceState>("Cube Demo State")
-    );
+        auto pipelineId = spec.PipelineLibrary->AddPipeline(pipelineInfo);
+
+        GraphicsPipelineInstanceInfo pipelineInstanceInfo = {
+            .Name = "Cube Pipeline Instance",
+            .PipelineId = pipelineId,
+            .BindingDescriptions = { vk::VertexInputBindingDescription(0, sizeof(Vertex)) },
+            .VertexInputs = { { 0, offsetof(Vertex, Position) }, { 0, offsetof(Vertex, Color) } },
+            .ColorAttachmentFormats = { vk::Format::eR8G8B8A8Unorm },
+            .DepthAttachmentFormat = vk::Format::eD24UnormS8Uint,
+            .StencilAttachmentFormat = vk::Format::eD24UnormS8Uint,
+        };
+
+        pipelineInstanceInfo.InputAssemblyState.setTopology(vk::PrimitiveTopology::eTriangleList);
+        pipelineInstanceInfo.MultisampleState.setRasterizationSamples(vk::SampleCountFlagBits::e4);
+        pipelineInstanceInfo.RasterizationState.setLineWidth(1.0f);
+        pipelineInstanceInfo.AttachmentBlendStates.emplace_back().setColorWriteMask(
+            vk::FlagTraits<vk::ColorComponentFlagBits>::allFlags
+        );
+
+        pipelineInstanceInfo.DepthStencilState.setDepthTestEnable(vk::True);
+        pipelineInstanceInfo.DepthStencilState.setDepthWriteEnable(vk::True);
+        pipelineInstanceInfo.DepthStencilState.setDepthCompareOp(vk::CompareOp::eLess);
+
+        m_CubePipelineId = spec.PipelineLibrary->AddPipelineInstance(pipelineInstanceInfo);
+
+        pipelineInstanceInfo.Name = "Mirror Pipeline Instance";
+        pipelineInstanceInfo.DepthStencilState.setStencilTestEnable(vk::True);
+        pipelineInstanceInfo.DepthStencilState.setBack(
+            vk::StencilOpState()
+                .setCompareOp(vk::CompareOp::eAlways)
+                .setPassOp(vk::StencilOp::eReplace)
+                .setWriteMask(0xff)
+                .setReference(1)
+        );
+
+        m_MirrorPipelineId = spec.PipelineLibrary->AddPipelineInstance(pipelineInstanceInfo);
+
+        pipelineInstanceInfo.Name = "Reflection Pipeline Instance";
+        pipelineInstanceInfo.DepthStencilState.setBack(
+            vk::StencilOpState().setCompareOp(vk::CompareOp::eEqual).setCompareMask(0xff).setReference(1)
+        );
+        pipelineInstanceInfo.AttachmentBlendStates.front()
+            .setBlendEnable(vk::True)
+            .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
+            .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
+            .setColorBlendOp(vk::BlendOp::eAdd)
+            .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+            .setDstAlphaBlendFactor(vk::BlendFactor::eZero)
+            .setAlphaBlendOp(vk::BlendOp::eAdd);
+
+        m_ReflectionPipelineId = spec.PipelineLibrary->AddPipelineInstance(pipelineInstanceInfo);
+    }
+}
+
+void CubeApplicationState::OnEnter(ApplicationState *previous)
+{
+    SetDefaultSwapchain();
+    DemoApplicationState::OnEnter(previous);
+    if (!DemoApplicationState::EnsurePipelinesCompiled(
+            { m_CubePipelineId, m_MirrorPipelineId, m_ReflectionPipelineId }
+        ))
+        return;
 
     struct Vertex
     {
@@ -743,43 +925,43 @@ CubeApplicationState::CubeApplicationState(const ApplicationStateSpec &spec)
                 vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst |
                 vk::ImageUsageFlagBits::eColorAttachment
             ),
-        true
+        true, false
     );
 
-    builder.AddHostBuffer(
+    builder.AddDeviceBuffer(
         "Vertex Buffer",
         vk::BufferCreateInfo()
             .setSize(std::span(vertices).size_bytes())
-            .setUsage(vk::BufferUsageFlagBits::eVertexBuffer),
-        false
+            .setUsage(vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer),
+        false, true
     );
-    builder.AddHostBuffer(
+    builder.AddDeviceBuffer(
         "Index Buffer",
         vk::BufferCreateInfo()
             .setSize(std::span(indices).size_bytes())
-            .setUsage(vk::BufferUsageFlagBits::eIndexBuffer),
-        false
+            .setUsage(vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer),
+        false, true
     );
     builder.AddHostBuffer(
         "Matrix Buffer",
         vk::BufferCreateInfo()
             .setSize(sizeof(MatrixBuffer))
             .setUsage(vk::BufferUsageFlagBits::eUniformBuffer),
-        true
+        true, false
     );
     builder.AddHostBuffer(
         "Mirror Buffer",
         vk::BufferCreateInfo()
             .setSize(sizeof(MatrixBuffer))
             .setUsage(vk::BufferUsageFlagBits::eUniformBuffer),
-        true
+        true, false
     );
     builder.AddHostBuffer(
         "Reflection Buffer",
         vk::BufferCreateInfo()
             .setSize(sizeof(MatrixBuffer))
             .setUsage(vk::BufferUsageFlagBits::eUniformBuffer),
-        true
+        true, false
     );
 
     builder.AddDeviceImage(
@@ -797,82 +979,12 @@ CubeApplicationState::CubeApplicationState(const ApplicationStateSpec &spec)
                     vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil, 0, 1, 0, 1
                 )
             ),
-        true
+        true, false
     );
-
-    ShaderId vertexShader = spec.ShaderLibrary->AddShader(
-        ShaderInfo("Shaders/mvp.vert", "main", vk::ShaderStageFlagBits::eVertex)
-    );
-    ShaderId fragmentShader = spec.ShaderLibrary->AddShader(
-        ShaderInfo("Shaders/color.frag", "main", vk::ShaderStageFlagBits::eFragment)
-    );
-
-    spec.ShaderLibrary->LoadShader(vertexShader);
-    spec.ShaderLibrary->LoadShader(fragmentShader);
-
-    GraphicsPipelineId cubePipelineId, mirrorPipelineId, reflectionPipelineId;
-    {
-        GraphicsPipelineInfo pipelineInfo = {
-            .Name = "Cube Pipeline",
-            .VertexShaderId = vertexShader,
-            .FragmentShaderId = fragmentShader,
-            .BindingDescriptions = { vk::VertexInputBindingDescription(0, sizeof(Vertex)) },
-            .VertexInputs = { { 0, offsetof(Vertex, Position) }, { 0, offsetof(Vertex, Color) } },
-            .ColorAttachmentFormats = { vk::Format::eR8G8B8A8Unorm },
-            .DepthAttachmentFormat = vk::Format::eD24UnormS8Uint,
-            .StencilAttachmentFormat = vk::Format::eD24UnormS8Uint,
-        };
-
-        pipelineInfo.InputAssemblyState.setTopology(vk::PrimitiveTopology::eTriangleList);
-        pipelineInfo.MultisampleState.setRasterizationSamples(vk::SampleCountFlagBits::e4);
-        pipelineInfo.RasterizationState.setLineWidth(1.0f);
-        pipelineInfo.AttachmentBlendStates.emplace_back().setColorWriteMask(
-            vk::FlagTraits<vk::ColorComponentFlagBits>::allFlags
-        );
-
-        pipelineInfo.DepthStencilState.setDepthTestEnable(vk::True);
-        pipelineInfo.DepthStencilState.setDepthWriteEnable(vk::True);
-        pipelineInfo.DepthStencilState.setDepthCompareOp(vk::CompareOp::eLess);
-
-        cubePipelineId = spec.PipelineLibrary->AddPipeline(pipelineInfo);
-
-        pipelineInfo.Name = "Mirror Pipeline";
-        pipelineInfo.DepthStencilState.setStencilTestEnable(vk::True);
-        pipelineInfo.DepthStencilState.setBack(
-            vk::StencilOpState()
-                .setCompareOp(vk::CompareOp::eAlways)
-                .setPassOp(vk::StencilOp::eReplace)
-                .setWriteMask(0xff)
-                .setReference(1)
-        );
-
-        mirrorPipelineId = spec.PipelineLibrary->AddPipeline(pipelineInfo);
-
-        pipelineInfo.DepthStencilState.setBack(
-            vk::StencilOpState().setCompareOp(vk::CompareOp::eEqual).setCompareMask(0xff).setReference(1)
-        );
-        pipelineInfo.AttachmentBlendStates.front()
-            .setBlendEnable(vk::True)
-            .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
-            .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
-            .setColorBlendOp(vk::BlendOp::eAdd)
-            .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
-            .setDstAlphaBlendFactor(vk::BlendFactor::eZero)
-            .setAlphaBlendOp(vk::BlendOp::eAdd);
-
-        reflectionPipelineId = spec.PipelineLibrary->AddPipeline(pipelineInfo);
-    }
-
-    [[maybe_unused]] bool success = spec.PipelineLibrary->CompilePipeline(cubePipelineId);
-    assert(success == true);
-    success = spec.PipelineLibrary->CompilePipeline(mirrorPipelineId);
-    assert(success == true);
-    success = spec.PipelineLibrary->CompilePipeline(reflectionPipelineId);
-    assert(success == true);
 
     {
         IndexedGraphicsPassSpec passSpec = {
-            .Pipeline = cubePipelineId,
+            .Pipeline = m_CubePipelineId,
             .BufferBindings = {
                 { "Matrix Buffer", 0, true, false },
             },
@@ -892,20 +1004,22 @@ CubeApplicationState::CubeApplicationState(const ApplicationStateSpec &spec)
                 .LoadOp = vk::AttachmentLoadOp::eClear,
                 .ClearValue = vk::ClearDepthStencilValue(1.0f),
             } },
-            .Command = {
-                .IndexCount = static_cast<uint32_t>(indices.size()),
-                .InstanceCount = 1,
-                .FirstIndex = 0,
-                .VertexOffset = 0,
-                .FirstInstance = 0,
-            },
+            .Draws = { {
+                .Command = {
+                    .IndexCount = static_cast<uint32_t>(indices.size()),
+                    .InstanceCount = 1,
+                    .FirstIndex = 0,
+                    .VertexOffset = 0,
+                    .FirstInstance = 0,
+                },
+            } },
         };
         builder.AddIndexedGraphicsPass("Main Pass", passSpec);
     }
 
     {
         IndexedGraphicsPassSpec passSpec = {
-            .Pipeline = mirrorPipelineId,
+            .Pipeline = m_MirrorPipelineId,
             .BufferBindings = {
                 { "Mirror Buffer", 0, true, false },
             },
@@ -928,20 +1042,22 @@ CubeApplicationState::CubeApplicationState(const ApplicationStateSpec &spec)
                 .LoadOp = vk::AttachmentLoadOp::eClear,
                 .ClearValue = vk::ClearDepthStencilValue(1.0f, 0),
             } },
-            .Command = {
-                .IndexCount = 6,
-                .InstanceCount = 1,
-                .FirstIndex = 0,
-                .VertexOffset = 0,
-                .FirstInstance = 0,
-            },
+            .Draws = {{
+                .Command = {
+                    .IndexCount = 6,
+                    .InstanceCount = 1,
+                    .FirstIndex = 0,
+                    .VertexOffset = 0,
+                    .FirstInstance = 0,
+                },
+            }},
         };
         builder.AddIndexedGraphicsPass("Mirror Pass", passSpec);
     }
 
     {
         IndexedGraphicsPassSpec passSpec = {
-            .Pipeline = reflectionPipelineId,
+            .Pipeline = m_ReflectionPipelineId,
             .BufferBindings = {
                 { "Reflection Buffer", 0, true, false },
             },
@@ -966,13 +1082,15 @@ CubeApplicationState::CubeApplicationState(const ApplicationStateSpec &spec)
                 .ImageResource = "Depth Stencil Image",
                 .LoadOp = vk::AttachmentLoadOp::eLoad,
             } },
-            .Command = {
-                .IndexCount = static_cast<uint32_t>(indices.size()),
-                .InstanceCount = 1,
-                .FirstIndex = 0,
-                .VertexOffset = 0,
-                .FirstInstance = 0,
-            },
+            .Draws = {{
+                .Command = {
+                    .IndexCount = static_cast<uint32_t>(indices.size()),
+                    .InstanceCount = 1,
+                    .FirstIndex = 0,
+                    .VertexOffset = 0,
+                    .FirstInstance = 0,
+                },
+            }},
         };
         builder.AddIndexedGraphicsPass("Reflection Pass", passSpec);
     }
@@ -991,25 +1109,27 @@ CubeApplicationState::CubeApplicationState(const ApplicationStateSpec &spec)
         builder.AddCustomGraphicsPass("UI Pass", passSpec);
     }
 
-    m_FrameGraph = builder.CreateUnique(spec.PipelineLibrary, m_ResourceAllocator.get());
+    m_FrameGraph = builder.CreateUnique(m_PipelineLibrary, m_ResourceAllocator.get());
 
     auto v = std::span(vertices);
     auto i = std::span(indices);
 
-    m_ResourceAllocator->UploadToBuffer(
-        m_FrameGraph->GetBuffer("Vertex Buffer").front(), v.data(), v.size_bytes()
-    );
-    m_ResourceAllocator->UploadToBuffer(
-        m_FrameGraph->GetBuffer("Index Buffer").front(), i.data(), i.size_bytes()
-    );
-
     RendererSpec rendererSpec = {
-        .LogicalDevice = spec.LogicalDevice,
+        .LogicalDevice = m_LogicalDevice,
         .MainQueue = m_MainQueue,
         .FrameGraph = m_FrameGraph.get(),
+        .ResourceAllocator = m_ResourceAllocator.get(),
     };
 
     m_Renderer = std::make_unique<Renderer>(rendererSpec);
+
+    m_Renderer->UploadWithStaging(m_FrameGraph->GetBuffer("Vertex Buffer").front(), std::as_bytes(v));
+    m_Renderer->UploadWithStaging(m_FrameGraph->GetBuffer("Index Buffer").front(), std::as_bytes(i));
+}
+
+void CubeApplicationState::OnExit(ApplicationState *next)
+{
+    DemoApplicationState::OnExit(next);
 }
 
 void CubeApplicationState::OnResize(const Swapchain *swapchain)
@@ -1114,19 +1234,9 @@ void CubeApplicationState::OnRender()
 SwapchainUserInterfaceState::SwapchainUserInterfaceState(
     SwapchainBuilder *swapchainBuilder, vk::Format format, uint32_t imageCount
 )
-    : DemoUserInterfaceState("Swapchain Demo State"), m_SwapchainBuilder(swapchainBuilder), m_CurrentFormat(format),
-      m_ImageCount(imageCount)
+    : DemoUserInterfaceState(), m_SwapchainBuilder(swapchainBuilder),
+      m_CurrentFormat(format), m_ImageCount(imageCount)
 {
-}
-
-void SwapchainUserInterfaceState::OnInit()
-{
-    DemoUserInterfaceState::OnInit();
-}
-
-void SwapchainUserInterfaceState::OnShutdown()
-{
-    DemoUserInterfaceState::OnShutdown();
 }
 
 void SwapchainUserInterfaceState::OnUpdate(float timeStep)
@@ -1138,7 +1248,7 @@ void SwapchainUserInterfaceState::OnUpdate(float timeStep)
     ImGui::Begin("Swapchain Settings");
 
     auto presentModes = m_SwapchainBuilder->GetPresentModes();
-    static size_t presentModeIndex = 
+    static size_t presentModeIndex =
         std::distance(presentModes.begin(), std::ranges::find(presentModes, vk::PresentModeKHR::eFifo));
     if (ImGui::BeginCombo("Present Modes", vk::to_string(presentModes[presentModeIndex]).c_str()))
     {
@@ -1175,7 +1285,9 @@ void SwapchainUserInterfaceState::OnUpdate(float timeStep)
         ImGui::EndCombo();
     }
 
-    static int frameCount = std::clamp(m_ImageCount, m_SwapchainBuilder->GetMinImageCount(), m_SwapchainBuilder->GetMaxImageCount());
+    static int frameCount = std::clamp(
+        m_ImageCount, m_SwapchainBuilder->GetMinImageCount(), m_SwapchainBuilder->GetMaxImageCount()
+    );
     int max = std::min(64u, m_SwapchainBuilder->GetMaxImageCount());
     if (ImGui::SliderInt("Image Count", &frameCount, m_SwapchainBuilder->GetMinImageCount(), max))
     {
@@ -1185,11 +1297,6 @@ void SwapchainUserInterfaceState::OnUpdate(float timeStep)
     }
 
     ImGui::End();
-}
-
-void SwapchainUserInterfaceState::OnKeyRelease(Key key)
-{
-    DemoUserInterfaceState::OnKeyRelease(key);
 }
 
 vk::Format SwapchainUserInterfaceState::GetFormat() const
@@ -1203,36 +1310,64 @@ uint32_t SwapchainUserInterfaceState::GetImageCount() const
 }
 
 SwapchainApplicationState::SwapchainApplicationState(const ApplicationStateSpec &spec)
-    : m_MainQueue(spec.Queues.at(Application::MainQueueName)), m_SwapchainBuilder(spec.SwapchainBuilder)
+    : m_LogicalDevice(spec.LogicalDevice), m_MainQueue(spec.Queues.at(Application::MainQueueName)),
+      m_PipelineLibrary(spec.PipelineLibrary), m_SwapchainBuilder(spec.SwapchainBuilder)
 {
-    ResourceManagerSpec resourceManagerSpec = {
+    m_ResourceManagerSpec = {
         .ApiVersion = spec.ApiVersion,
         .Instance = spec.Instance,
         .PhysicalDevice = spec.PhysicalDevice,
         .LogicalDevice = spec.LogicalDevice,
     };
 
-    m_ResourceAllocator = std::make_unique<ResourceAllocator>(resourceManagerSpec);
+    DemoUserInterfaceState::AddState("Swapchain Demo State");
+}
 
-    UserInterfaceVulkanSpec userInterfaceSpec = {
-        .Window = spec.ApplicationWindow->GetHandle(),
-        .ApiVersion = spec.ApiVersion,
-        .Instance = spec.Instance,
-        .PhysicalDevice = spec.PhysicalDevice,
-        .LogicalDevice = spec.LogicalDevice,
-        .QueueFamilyIndex = m_MainQueue.FamilyIndex,
-        .Queue = m_MainQueue.Handle,
-        .ImageCount = 2,
-        .ImageFormat = vk::Format::eR8G8B8A8Unorm,
-    };
+SwapchainApplicationState::~SwapchainApplicationState() {}
+
+void SwapchainApplicationState::OnEnter(ApplicationState * /* previous */)
+{
+    m_SwapchainBuilder->SetUsageFlags(
+        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst
+    );
+    m_SwapchainBuilder->SetPresentMode(vk::PresentModeKHR::eFifo);
+    m_SwapchainBuilder->SetImageCount(GetImageCount(m_SwapchainBuilder, 2u));
+    vk::Format format = GetSurfaceFormat(m_SwapchainBuilder);
+    if (format == vk::Format::eUndefined)
+    {
+        auto &errors = ErrorApplicationState::GetErrors();
+        errors.clear();
+        errors.push_back("Could not find any suitable swapchain formats");
+        ErrorApplicationState::SetErrorState("Swapchain Demo State");
+        return;
+    }
+    m_SwapchainBuilder->SetSurfaceFormat(format);
+    Application::GetInstance()->SetRecreateSwapchain();
+
+    m_ResourceAllocator = std::make_unique<ResourceAllocator>(m_ResourceManagerSpec);
 
     {
-        uint32_t imageCount = std::clamp(2u, m_SwapchainBuilder->GetMinImageCount(), m_SwapchainBuilder->GetMaxImageCount());
-        auto ptr = std::make_unique<SwapchainUserInterfaceState>(
+        const auto &spec = Application::GetInstance()->GetApplicationStateSpec();
+
+        const uint32_t imageCount =
+            std::clamp(2u, m_SwapchainBuilder->GetMinImageCount(), m_SwapchainBuilder->GetMaxImageCount());
+
+        UserInterfaceVulkanSpec userInterfaceSpec = {
+            .Window = spec.ApplicationWindow->GetHandle(),
+            .ApiVersion = spec.ApiVersion,
+            .Instance = spec.Instance,
+            .PhysicalDevice = spec.PhysicalDevice,
+            .LogicalDevice = spec.LogicalDevice,
+            .QueueFamilyIndex = m_MainQueue.FamilyIndex,
+            .Queue = m_MainQueue.Handle,
+            .ImageCount = imageCount,
+            .ImageFormat = vk::Format::eR8G8B8A8Unorm,
+        };
+
+        m_UserInterfaceState = std::make_unique<SwapchainUserInterfaceState>(
             spec.SwapchainBuilder, vk::Format::eR8G8B8A8Unorm, imageCount
         );
-        m_UserInterfaceState = ptr.get();
-        m_UserInterface = std::make_unique<UserInterface>(userInterfaceSpec, std::move(ptr));
+        m_UserInterface = std::make_unique<UserInterface>(userInterfaceSpec, *m_UserInterfaceState);
     }
 
     FrameGraphBuilder builder;
@@ -1247,7 +1382,7 @@ SwapchainApplicationState::SwapchainApplicationState(const ApplicationStateSpec 
                 vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst |
                 vk::ImageUsageFlagBits::eColorAttachment
             ),
-        true
+        true, false
     );
 
     {
@@ -1276,34 +1411,25 @@ SwapchainApplicationState::SwapchainApplicationState(const ApplicationStateSpec 
         builder.AddBlitPass("Blit Pass", blitSpec);
     }
 
-    m_FrameGraph = builder.CreateUnique(spec.PipelineLibrary, m_ResourceAllocator.get());
+    m_FrameGraph = builder.CreateUnique(m_PipelineLibrary, m_ResourceAllocator.get());
 
     RendererSpec rendererSpec = {
-        .LogicalDevice = spec.LogicalDevice,
+        .LogicalDevice = m_LogicalDevice,
         .MainQueue = m_MainQueue,
         .FrameGraph = m_FrameGraph.get(),
+        .ResourceAllocator = m_ResourceAllocator.get(),
     };
 
     m_Renderer = std::make_unique<Renderer>(rendererSpec);
 }
 
-SwapchainApplicationState::~SwapchainApplicationState()
-{
-}
-
-void SwapchainApplicationState::OnEnter(ApplicationState * /* previous */)
-{
-    m_SwapchainBuilder->SetUsageFlags(
-        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst
-    );
-    Application::GetInstance()->SetRecreateSwapchain();
-}
-
 void SwapchainApplicationState::OnExit(ApplicationState * /* next */)
 {
-    m_SwapchainBuilder->SetPresentMode(vk::PresentModeKHR::eFifo);
-    m_SwapchainBuilder->SetImageCount(std::clamp(2u, m_SwapchainBuilder->GetMinImageCount(), m_SwapchainBuilder->GetMaxImageCount()));
-    Application::GetInstance()->SetRecreateSwapchain();
+    m_Renderer.reset();
+    m_FrameGraph.reset();
+    m_UserInterface.reset();
+    m_UserInterfaceState.reset();
+    m_ResourceAllocator.reset();
 }
 
 void SwapchainApplicationState::OnResize(const Swapchain *swapchain)
@@ -1312,18 +1438,8 @@ void SwapchainApplicationState::OnResize(const Swapchain *swapchain)
 
     const vk::Extent2D extent = swapchain->GetExtent();
 
-    vk::Format format = m_UserInterfaceState->GetFormat();
-    auto getUnormFormat = [](vk::Format format) {
-        switch (format)
-        {
-        case vk::Format::eR8G8B8A8Srgb:
-            return vk::Format::eR8G8B8A8Unorm;
-        case vk::Format::eB8G8R8A8Srgb:
-            return vk::Format::eB8G8R8A8Unorm;
-        default:
-            return format;
-        }
-    };
+    const vk::Format format = m_UserInterfaceState->GetFormat();
+    const vk::Format unormFormat = GetUnormFormat(format);
 
     {
         const auto &spec = Application::GetInstance()->GetApplicationStateSpec();
@@ -1336,20 +1452,20 @@ void SwapchainApplicationState::OnResize(const Swapchain *swapchain)
             .QueueFamilyIndex = m_MainQueue.FamilyIndex,
             .Queue = m_MainQueue.Handle,
             .ImageCount = m_UserInterfaceState->GetImageCount(),
-            .ImageFormat = getUnormFormat(format),
+            .ImageFormat = unormFormat,
         };
 
-        auto ptr = std::make_unique<SwapchainUserInterfaceState>(
+        m_UserInterface.reset();
+        m_UserInterfaceState = std::make_unique<SwapchainUserInterfaceState>(
             m_SwapchainBuilder, format, m_UserInterfaceState->GetImageCount()
         );
-        m_UserInterfaceState = ptr.get();
-        m_UserInterface = std::make_unique<UserInterface>(userInterfaceSpec, std::move(ptr));
+        m_UserInterface = std::make_unique<UserInterface>(userInterfaceSpec, *m_UserInterfaceState);
     }
 
     {
         auto &image = m_FrameGraph->ModifyImage("Image");
         image.Info.setFormat(format);
-        image.ViewInfo.setFormat(getUnormFormat(format));
+        image.ViewInfo.setFormat(unormFormat);
         image.Info.setExtent(vk::Extent3D(extent, 1));
         m_FrameGraph->UpdateImage("Image");
     }

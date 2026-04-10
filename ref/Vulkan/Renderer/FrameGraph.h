@@ -8,7 +8,7 @@
 
 #include "RenderPass.h"
 #include "ResourceManager.h"
-#include "ShaderLibrary.h"
+#include "PipelineLibrary.h"
 
 namespace ref::vulkan
 {
@@ -18,6 +18,7 @@ struct Buffer
     vk::BufferCreateInfo Info;
     bool IsDevice;
     bool IsBuffered;
+    bool IsPersistent;
     std::vector<BufferResourceId> Resources;
 
     BufferResourceId GetResourceId(uint32_t frameInFlight);
@@ -29,6 +30,7 @@ struct Image
     vk::ImageViewCreateInfo ViewInfo;
     bool IsDevice;
     bool IsBuffered;
+    bool IsPersistent;
     std::vector<std::pair<ImageResourceId, ImageViewResourceId>> Resources;
 
     std::pair<ImageResourceId, ImageViewResourceId> GetResourceId(uint32_t frameInFlight);
@@ -287,6 +289,9 @@ private:
     vk::ImageView GetImageViewHandle(const std::string &name);
     vk::ImageView GetImageViewHandle(const std::string &name, uint32_t frameInFlight);
 
+    template<typename P, typename D>
+    void SetPushConstants(vk::CommandBuffer commandBuffer, const P &pass, const D &draw);
+
     void Execute(vk::CommandBuffer commandBuffer, const ClearPass &pass);
     void Execute(vk::CommandBuffer commandBuffer, const BlitPass &pass);
     void Execute(vk::CommandBuffer commandBuffer, const ComputePass &pass);
@@ -301,33 +306,8 @@ private:
     template<typename P> void SetupPass(P &pass, PassExecution &execution);
     template<typename P> void ExecutePass(const P &pass, vk::CommandBuffer commandBuffer);
 
-    template<auto F, typename... Args> void Dispatch(const PassExecution &execution, Args &&...args)
-    {
-        switch (execution.Type)
-        {
-        case PassType::Clear:
-            F(m_ClearPasses.at(execution.Name), args...);
-            break;
-        case PassType::Blit:
-            F(m_BlitPasses.at(execution.Name), args...);
-            break;
-        case PassType::Compute:
-            F(m_ComputePasses.at(execution.Name), args...);
-            break;
-        case PassType::Graphics:
-            F(m_GraphicsPasses.at(execution.Name), args...);
-            break;
-        case PassType::IndexedGraphics:
-            F(m_IndexedGraphicsPasses.at(execution.Name), args...);
-            break;
-        case PassType::IndexedIndirectGraphics:
-            F(m_IndexedIndirectGraphicsPasses.at(execution.Name), args...);
-            break;
-        case PassType::CustomGraphics:
-            F(m_CustomGraphicsPasses.at(execution.Name), args...);
-            break;
-        }
-    }
+    template<typename F, typename... Args>
+    void Dispatch(const PassExecution &execution, F &&func, Args &&...args);
 };
 
 }

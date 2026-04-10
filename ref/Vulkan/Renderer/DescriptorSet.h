@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.hpp>
 
 #include <list>
+#include <span>
 #include <vector>
 
 namespace ref::vulkan
@@ -74,6 +75,10 @@ public:
     DescriptorSetBuilder &operator=(DescriptorSetBuilder &&descriptorSetBuilder) noexcept;
 
     DescriptorSetBuilder &SetDescriptor(vk::DescriptorSetLayoutBinding binding, bool partial = false);
+    
+    int32_t GetMaxBinding() const;
+    bool HasBinding(uint32_t binding) const;
+    const vk::DescriptorSetLayoutBinding &GetBinding(uint32_t binding) const;
 
     [[nodiscard]] vk::DescriptorSetLayout CreateLayout();
     [[nodiscard]] std::unique_ptr<DescriptorSet> CreateSetUnique(uint32_t framesInFlight) const;

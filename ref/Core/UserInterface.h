@@ -28,7 +28,39 @@ enum class Key
 {
     Unknown,
     Space,
+    W,
+    A,
+    S,
+    D,
+    Q,
+    E,
     H,
+};
+
+enum class KeyAction
+{
+    Press,
+    Release,
+    Repeat,
+};
+
+enum class Button
+{
+    Left,
+    Right,
+    Middle,
+    Unknown,
+};
+
+enum class ButtonAction
+{
+    Press,
+    Release,
+};
+
+struct Mods
+{
+    bool Shift, Control, Alt, Super, CapsLock, NumLock;
 };
 
 class UserInterfaceState
@@ -40,11 +72,22 @@ public:
     UserInterfaceState(const UserInterfaceState &) = delete;
     UserInterfaceState &operator=(const UserInterfaceState &) = delete;
 
-    virtual void OnInit() = 0;
-    virtual void OnShutdown() = 0;
+    virtual void OnInit() {}
+    virtual void OnShutdown() {}
 
-    virtual void OnUpdate(float timeStep) = 0;
-    virtual void OnKeyRelease(Key key) = 0;
+    virtual void OnUpdate([[maybe_unused]] float timeStep) {}
+
+    virtual void OnKeyEvent(
+        [[maybe_unused]] Key key, [[maybe_unused]] KeyAction action, [[maybe_unused]] Mods mods
+    )
+    {
+    }
+    virtual void OnMouseButtonEvent(
+        [[maybe_unused]] Button button, [[maybe_unused]] ButtonAction action, [[maybe_unused]] Mods mods
+    )
+    {
+    }
+    virtual void OnCursorMoveEvent([[maybe_unused]] double xpos, [[maybe_unused]] double ypos) {}
 };
 
 class UserInterface
@@ -53,10 +96,12 @@ public:
     static void InitSystem();
     static void ShutdownSystem();
 
-    static void EmitKeyRelease(Key key);
+    static void EmitKeyEvent(GLFWwindow *window, int key, int scancode, int action, int mods);
+    static void EmitMouseButtonEvent(GLFWwindow *window, int button, int action, int mods);
+    static void EmitCursorMoveEvent(GLFWwindow *window, double xpos, double ypos);
 
 public:
-    UserInterface(UserInterfaceVulkanSpec spec, std::unique_ptr<UserInterfaceState> state);
+    UserInterface(UserInterfaceVulkanSpec spec, UserInterfaceState &state);
     ~UserInterface();
 
     UserInterface(const UserInterface &) = delete;
@@ -75,11 +120,11 @@ private:
 
 private:
     UserInterfaceVulkanSpec m_VulkanSpec;
-    std::unique_ptr<UserInterfaceState> m_State;
+    UserInterfaceState &m_State;
 
 private:
     void OnActivateVulkan();
     void OnDeactivateVulkan();
-};  
+};
 
 }

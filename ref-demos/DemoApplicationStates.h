@@ -2,14 +2,14 @@
 
 #include <vulkan/vulkan.hpp>
 
-#include "Core/UserInterface.h"
+#include <Core/UserInterface.h>
 
-#include "Vulkan/Renderer/Renderer.h"
-#include "Vulkan/Renderer/ResourceManager.h"
-#include "Vulkan/Renderer/ShaderLibrary.h"
+#include <Vulkan/Renderer/Renderer.h>
+#include <Vulkan/Renderer/ResourceManager.h>
+#include <Vulkan/Renderer/ShaderLibrary.h>
 
-#include <string>
 #include <set>
+#include <string>
 
 namespace ref::vulkan
 {
@@ -17,20 +17,52 @@ namespace ref::vulkan
 class DemoUserInterfaceState : public UserInterfaceState
 {
 public:
-    DemoUserInterfaceState(const std::string &state);
+    DemoUserInterfaceState() = default;
     ~DemoUserInterfaceState() override = default;
 
-    void OnInit() override;
-    void OnShutdown() override;
-
     void OnUpdate(float timeStep) override;
-    void OnKeyRelease(Key key) override;
+
+    static void AddState(const std::string &name);
 
 private:
     inline static std::set<std::string> s_DemoStates;
 };
 
-class ComputeApplicationState final : public ApplicationState
+class DemoApplicationState : public ApplicationState
+{
+public:
+    DemoApplicationState(const std::string &state);
+    ~DemoApplicationState() override = default;
+
+    void OnEnter(ApplicationState *previous) override;
+    void OnExit(ApplicationState *next) override;
+
+protected:
+    void SetDefaultSwapchain();
+    void SetSwapchainFormat(vk::SurfaceFormatKHR format);
+    void SetSwapchainUsageFlags(vk::ImageUsageFlags usageFlags);
+    void SetSwapchainImageCount(uint32_t imageCount);
+
+    bool EnsurePipelinesCompiled(std::initializer_list<ComputePipelineInstanceId> pipelines);
+    bool EnsurePipelinesCompiled(std::initializer_list<GraphicsPipelineInstanceId> pipelines);
+
+protected:
+    std::unique_ptr<ResourceAllocator> m_ResourceAllocator;
+    std::unique_ptr<DemoUserInterfaceState> m_UserInterfaceState;
+    std::unique_ptr<UserInterface> m_UserInterface;
+    std::unique_ptr<FrameGraph> m_FrameGraph;
+    std::unique_ptr<Renderer> m_Renderer;
+
+    std::string m_State;
+    vk::SurfaceFormatKHR m_SwapchainFormat;
+    vk::ImageUsageFlags m_SwapchainUsageFlags;
+    uint32_t m_SwapchainImageCount = 2;
+
+private:
+    void SetShaderErrors();
+};
+
+class ComputeApplicationState final : public DemoApplicationState
 {
 public:
     ComputeApplicationState(const ApplicationStateSpec &spec);
@@ -45,65 +77,71 @@ public:
     void OnRender() override;
 
 private:
+    vk::Device m_LogicalDevice;
     Queue m_MainQueue;
-    std::unique_ptr<UserInterface> m_UserInterface;
-    std::unique_ptr<FrameGraph> m_FrameGraph;
-    std::unique_ptr<Renderer> m_Renderer;
-    std::unique_ptr<ResourceAllocator> m_ResourceAllocator;
 
     ShaderId m_ShaderId;
-    ComputePipelineId m_PipelineId;
+    ComputePipelineInstanceId m_PipelineId;
 
     float m_Time = 0.0f;
 
     ShaderLibrary *m_ShaderLibrary;
     PipelineLibrary *m_PipelineLibrary;
-    SwapchainBuilder *m_SwapchainBuilder;
 };
 
-class TriangleApplicationState final : public ApplicationState
+class TriangleApplicationState final : public DemoApplicationState
 {
 public:
     TriangleApplicationState(const ApplicationStateSpec &spec);
 
+    void OnEnter(ApplicationState *previous) override;
+    void OnExit(ApplicationState *next) override;
+
     void OnResize(const Swapchain *swapchain) override;
 
     void OnUpdate(float timeStep) override;
     void OnRender() override;
 
 private:
+    vk::Device m_LogicalDevice;
     Queue m_MainQueue;
-    std::unique_ptr<UserInterface> m_UserInterface;
-    std::unique_ptr<FrameGraph> m_FrameGraph;
-    std::unique_ptr<Renderer> m_Renderer;
-    std::unique_ptr<ResourceAllocator> m_ResourceAllocator;
+    PipelineLibrary *m_PipelineLibrary;
+
+    GraphicsPipelineInstanceId m_TrianglePiplineId;
 };
 
-class ParticleApplicationState final : public ApplicationState
+class ParticleApplicationState final : public DemoApplicationState
 {
 public:
     ParticleApplicationState(const ApplicationStateSpec &spec);
 
+    void OnEnter(ApplicationState *previous) override;
+    void OnExit(ApplicationState *next) override;
+
     void OnResize(const Swapchain *swapchain) override;
 
     void OnUpdate(float timeStep) override;
     void OnRender() override;
 
 private:
+    vk::Device m_LogicalDevice;
     Queue m_MainQueue;
-    std::unique_ptr<UserInterface> m_UserInterface;
-    std::unique_ptr<FrameGraph> m_FrameGraph;
-    std::unique_ptr<Renderer> m_Renderer;
-    std::unique_ptr<ResourceAllocator> m_ResourceAllocator;
+    PipelineLibrary *m_PipelineLibrary;
+
+    ComputePipelineInstanceId m_ComputePipelineId;
+    GraphicsPipelineInstanceId m_ParticlePipelineId;
 
     float m_Time = 0.0f;
     uint32_t m_ParticleIdx = 0;
 };
 
-class CubeApplicationState final : public ApplicationState
+class CubeApplicationState final : public DemoApplicationState
 {
 public:
     CubeApplicationState(const ApplicationStateSpec &spec);
+
+    void OnEnter(ApplicationState *previous) override;
+    void OnExit(ApplicationState *next) override;
 
     void OnResize(const Swapchain *swapchain) override;
 
@@ -111,11 +149,13 @@ public:
     void OnRender() override;
 
 private:
+    vk::Device m_LogicalDevice;
     Queue m_MainQueue;
-    std::unique_ptr<UserInterface> m_UserInterface;
-    std::unique_ptr<FrameGraph> m_FrameGraph;
-    std::unique_ptr<Renderer> m_Renderer;
-    std::unique_ptr<ResourceAllocator> m_ResourceAllocator;
+    PipelineLibrary *m_PipelineLibrary;
+
+    GraphicsPipelineInstanceId m_CubePipelineId;
+    GraphicsPipelineInstanceId m_MirrorPipelineId;
+    GraphicsPipelineInstanceId m_ReflectionPipelineId;
 
     struct MatrixBuffer
     {
@@ -133,11 +173,7 @@ public:
     SwapchainUserInterfaceState(SwapchainBuilder *swapchainBuilder, vk::Format format, uint32_t imageCount);
     ~SwapchainUserInterfaceState() override = default;
 
-    void OnInit() override;
-    void OnShutdown() override;
-
     void OnUpdate(float timeStep) override;
-    void OnKeyRelease(Key key) override;
 
     vk::Format GetFormat() const;
     uint32_t GetImageCount() const;
@@ -164,8 +200,12 @@ public:
     void OnRender() override;
 
 private:
+    vk::Device m_LogicalDevice;
+    ResourceManagerSpec m_ResourceManagerSpec;
     Queue m_MainQueue;
-    SwapchainUserInterfaceState *m_UserInterfaceState;
+    PipelineLibrary *m_PipelineLibrary;
+
+    std::unique_ptr<SwapchainUserInterfaceState> m_UserInterfaceState;
     std::unique_ptr<UserInterface> m_UserInterface;
     std::unique_ptr<FrameGraph> m_FrameGraph;
     std::unique_ptr<Renderer> m_Renderer;

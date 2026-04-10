@@ -12,10 +12,10 @@ Swapchain::Swapchain(vk::Device device, const SwapchainSpec &spec, const Swapcha
     : m_Surface(spec.Surface), m_PresentMode(spec.PresentMode), m_SurfaceFormat(spec.SurfaceFormat),
       m_Extent(spec.Extent), m_ImageCount(spec.ImageCount), m_InFlightCount(m_ImageCount - 1)
 {
-    logger::info("Current present mode: {}", vk::to_string(m_PresentMode));
-    logger::info("Swapchain Image Count: {}", m_ImageCount);
-    logger::info("Frame In Flight Count: {}", m_InFlightCount);
-    logger::info("Swapchain resizing to: {}x{}", m_Extent.width, m_Extent.height);
+    logger::debug("Current present mode: {}", vk::to_string(m_PresentMode));
+    logger::debug("Swapchain Image Count: {}", m_ImageCount);
+    logger::debug("Frame In Flight Count: {}", m_InFlightCount);
+    logger::debug("Swapchain resizing to: {}x{}", m_Extent.width, m_Extent.height);
 
     auto presentQueueFamilies = spec.PresentQueueFamilies;
 
@@ -206,9 +206,9 @@ SwapchainBuilder::SwapchainBuilder(vk::PhysicalDevice physicalDevice, vk::Surfac
 void SwapchainBuilder::RefreshSurfaceCabilities()
 {
     m_SurfaceCapabilities = m_PhysicalDevice.getSurfaceCapabilitiesKHR(m_Surface);
-    logger::debug("Supported usage flags: {}", vk::to_string(m_SurfaceCapabilities.supportedUsageFlags));
-    logger::debug("Supported transforms: {}", vk::to_string(m_SurfaceCapabilities.supportedTransforms));
-    logger::debug(
+    logger::trace("Supported usage flags: {}", vk::to_string(m_SurfaceCapabilities.supportedUsageFlags));
+    logger::trace("Supported transforms: {}", vk::to_string(m_SurfaceCapabilities.supportedTransforms));
+    logger::trace(
         "Supported composite alpha: {}", vk::to_string(m_SurfaceCapabilities.supportedCompositeAlpha)
     );
 
@@ -221,9 +221,9 @@ void SwapchainBuilder::RefreshSurfaceCabilities()
     m_PresentModes = m_PhysicalDevice.getSurfacePresentModesKHR(m_Surface);
 
     for (vk::PresentModeKHR mode : m_PresentModes)
-        logger::debug("Supported present mode: {}", vk::to_string(mode));
+        logger::trace("Supported present mode: {}", vk::to_string(mode));
 
-    logger::debug(
+    logger::trace(
         "Surface allowed image count: {} - {}", m_SurfaceCapabilities.minImageCount,
         m_SurfaceCapabilities.maxImageCount
     );
@@ -235,7 +235,7 @@ void SwapchainBuilder::RefreshSurfaceCabilities()
     } };
 
     for (auto &[name, extent] : extents)
-        logger::debug("Surface {} extent: {}x{}", name, extent.width, extent.height);
+        logger::trace("Surface {} extent: {}x{}", name, extent.width, extent.height);
 
     m_Spec.Surface = m_Surface;
 }

@@ -47,6 +47,8 @@ public:
     Application(const Application &) = delete;
     Application &operator=(const Application &) = delete;
 
+    ShaderLibrary &GetShaderLibrary();
+    PipelineLibrary &GetPipelineLibrary();
     const ApplicationStateSpec &GetApplicationStateSpec();
 
     void Run(const std::string &state);
@@ -90,7 +92,9 @@ private:
 
     std::map<std::string, std::unique_ptr<ApplicationState>> m_States;
     ApplicationState *m_CurrentState = nullptr;
+    std::string m_CurrentStateName = "No State";
     ApplicationState *m_NextState = nullptr;
+    std::string m_NextStateName = "No State";
 };
 
 template<typename T> requires vk::isVulkanHandleType<T>::value

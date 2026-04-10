@@ -8,7 +8,7 @@
 #include <span>
 #include <vector>
 
-#include "ShaderLibrary.h"
+#include "PipelineLibrary.h"
 
 namespace ref::vulkan
 {
@@ -47,8 +47,7 @@ struct BlitPassSpec
 
 struct ComputePassSpec
 {
-    ComputePipelineId Pipeline;
-    std::span<const std::byte> PushConstantData;
+    ComputePipelineInstanceId Pipeline;
     std::vector<BufferBinding> BufferBindings;
     std::vector<ImageBinding> ImageBindings;
 
@@ -57,7 +56,15 @@ struct ComputePassSpec
         uint32_t GroupCountX;
         uint32_t GroupCountY;
         uint32_t GroupCountZ;
-    } Command;
+    };
+
+    struct DispatchSpec
+    {
+        CommandSpec Command;
+        std::span<const std::byte> PushConstantData;
+    };
+
+    std::vector<DispatchSpec> Dispatches;
 };
 
 struct PassAttachmentSpec
@@ -92,8 +99,7 @@ struct IndexBufferSpec
 
 struct GraphicsPassSpec
 {
-    GraphicsPipelineId Pipeline;
-    std::span<const std::byte> PushConstantData;
+    GraphicsPipelineInstanceId Pipeline;
     std::vector<BufferBinding> BufferBindings;
     std::vector<ImageBinding> ImageBindings;
 
@@ -113,13 +119,20 @@ struct GraphicsPassSpec
         uint32_t InstanceCount;
         uint32_t FirstVertex;
         uint32_t FirstInstance;
-    } Command;
+    };
+
+    struct DrawSpec
+    {
+        CommandSpec Command;
+        std::span<const std::byte> PushConstantData;
+    };
+
+    std::vector<DrawSpec> Draws;
 };
 
 struct IndexedGraphicsPassSpec
 {
-    GraphicsPipelineId Pipeline;
-    std::span<const std::byte> PushConstantData;
+    GraphicsPipelineInstanceId Pipeline;
     std::vector<BufferBinding> BufferBindings;
     std::vector<ImageBinding> ImageBindings;
 
@@ -141,13 +154,20 @@ struct IndexedGraphicsPassSpec
         uint32_t FirstIndex;
         uint32_t VertexOffset;
         uint32_t FirstInstance;
-    } Command;
+    };
+
+    struct DrawSpec
+    {
+        CommandSpec Command;
+        std::span<const std::byte> PushConstantData;
+    };
+
+    std::vector<DrawSpec> Draws;
 };
 
 struct IndexedIndirectGraphicsPassSpec
 {
-    GraphicsPipelineId Pipeline;
-    std::span<const std::byte> PushConstantData;
+    GraphicsPipelineInstanceId Pipeline;
     std::vector<BufferBinding> BufferBindings;
     std::vector<ImageBinding> ImageBindings;
 
@@ -169,7 +189,15 @@ struct IndexedIndirectGraphicsPassSpec
         uint32_t Offset;
         uint32_t DrawCount;
         uint32_t Stride;
-    } Command;
+    };
+
+    struct DrawSpec
+    {
+        CommandSpec Command;
+        std::span<const std::byte> PushConstantData;
+    };
+
+    std::vector<DrawSpec> Draws;
 };
 
 struct CustomGraphicsPassSpec
@@ -204,6 +232,19 @@ concept HasRegions = requires(S s) {
 };
 
 template<typename S>
+concept HasComputePipeline = requires(S s) {
+    { s.Pipeline } -> std::same_as<ComputePipelineInstanceId &>;
+};
+
+template<typename S>
+concept HasGraphicsPipeline = requires(S s) {
+    { s.Pipeline } -> std::same_as<GraphicsPipelineInstanceId &>;
+};
+
+template<typename S>
+concept HasPipeline = HasComputePipeline<S> || HasGraphicsPipeline<S>;
+
+template<typename S>
 concept HasRenderArea = requires(S s) {
     { s.RenderArea } -> std::same_as<vk::Rect2D &>;
 };
@@ -224,8 +265,8 @@ concept HasStencilAttachment = requires(S s) {
 };
 
 template<typename S>
-concept HasDispatchCommand = requires(S s) {
-    { s.Command } -> std::same_as<ComputePassSpec::CommandSpec &>;
+concept HasDispatchCommands = requires(S s) {
+    { s.Dispatches } -> ElementRange<ComputePassSpec::DispatchSpec>;
 };
 
 template<typename S>
@@ -239,13 +280,18 @@ concept HasScissors = requires(S s) {
 };
 
 template<typename S>
-concept HasDrawCommand = requires(S s) {
-    { s.Command } -> std::same_as<GraphicsPassSpec::CommandSpec &>;
+concept HasDrawCommands = requires(S s) {
+    { s.Draws } -> ElementRange<GraphicsPassSpec::DrawSpec>;
 };
 
 template<typename S>
-concept HasIndexedIndirectDrawCommand = requires(S s) {
-    { s.Command } -> std::same_as<IndexedIndirectGraphicsPassSpec::CommandSpec &>;
+concept HasIndexedDrawCommands = requires(S s) {
+    { s.Draws } -> ElementRange<IndexedGraphicsPassSpec::DrawSpec>;
+};
+
+template<typename S>
+concept HasIndexedIndirectDrawCommands = requires(S s) {
+    { s.Draws } -> ElementRange<IndexedIndirectGraphicsPassSpec::DrawSpec>;
 };
 
 template<typename S>
@@ -339,9 +385,9 @@ public:
         return m_Spec.DepthAttachment.ClearValue;
     }
 
-    ComputePassSpec::CommandSpec &GetDispatchCommand() requires HasDispatchCommand<S>
+    auto GetDispatchCommand() requires HasDispatchCommands<S>
     {
-        return m_Spec.Command;
+        return m_Spec.Dispatches | std::views::all;
     }
 
     std::vector<vk::Viewport> &GetViewports() requires HasViewports<S>
@@ -354,14 +400,19 @@ public:
         return m_Spec.Scissors;
     }
 
-    GraphicsPassSpec::CommandSpec &GetDrawCommand() requires HasDrawCommand<S>
+    auto GetDrawCommand() requires HasDrawCommands<S>
     {
-        return m_Spec.Command;
+        return m_Spec.Draws | std::views::all;
     }
 
-    IndexedIndirectGraphicsPassSpec::CommandSpec &GetIndexedIndirectDrawCommand() requires HasIndexedIndirectDrawCommand<S>
+    auto GetIndexedDrawCommand() requires HasIndexedDrawCommands<S>
     {
-        return m_Spec.Command;
+        return m_Spec.Draws | std::views::all;
+    }
+
+    auto GetIndexedIndirectDrawCommand() requires HasIndexedIndirectDrawCommands<S>
+    {
+        return m_Spec.Draws | std::views::all;
     }
 
 private:

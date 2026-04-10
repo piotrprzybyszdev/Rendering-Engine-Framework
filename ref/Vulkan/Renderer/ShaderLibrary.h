@@ -2,14 +2,14 @@
 
 #include <vulkan/vulkan.hpp>
 
+#include <atomic>
 #include <filesystem>
+#include <set>
 #include <span>
 #include <string>
 #include <vector>
 
 #include "Core/Core.h"
-
-#include "DescriptorSet.h"
 
 namespace ref::vulkan
 {
@@ -25,7 +25,7 @@ struct ShaderInfo
 
 struct ReflectionData
 {
-    vk::PushConstantRange PushConstants;
+    std::vector<vk::PushConstantRange> PushConstantRanges;
     std::vector<uint32_t> SpecializationConstantIds;
     std::vector<vk::DescriptorSetLayoutBinding> SetLayoutBindings;
 
@@ -38,7 +38,6 @@ struct ReflectionData
     std::vector<Attribute> InputAttributes;
     std::vector<Attribute> OutputAttributes;
 
-    bool HasPushConstants() const;
     void Combine(const ReflectionData &other);
 };
 
@@ -46,6 +45,8 @@ struct Shader
 {
     std::vector<uint32_t> Code;
     ReflectionData Reflection;
+    std::set<std::filesystem::path> Includes;
+    std::filesystem::file_time_type UpdateTime = std::filesystem::file_time_type::min();
 
     bool IsValid() const;
 };
@@ -66,12 +67,19 @@ public:
     ShaderLibrary(const ShaderLibrary &) = delete;
     ShaderLibrary &operator=(const ShaderLibrary &) = delete;
 
+    void SetShaderCachePath(const std::filesystem::path &path);
+    void PruneShaderCache();
+
+    void AddShadersFromDirectory(const std::filesystem::path &path);
+    ShaderId GetShaderByPath(const std::filesystem::path &path);
+
     ShaderId AddShader(ShaderInfo info);
 
     void LoadShader(ShaderId id);
     void LoadShaders();
+    void LoadShadersAsync(uint32_t &total, std::atomic<uint32_t> &done);
 
-    void WriteShaderCache();
+    void WriteShaderCaches();
 
     const ShaderInfo &GetShaderInfo(ShaderId id) const;
     const Shader &GetShader(ShaderId id) const;
@@ -81,6 +89,7 @@ public:
 private:
     vk::Device m_LogicalDevice;
     const uint32_t m_ApiVersion;
+    std::filesystem::path m_ShaderCachePath;
 
     std::vector<ShaderInfo> m_ShaderInfos;
     std::vector<Shader> m_Shaders;
@@ -89,95 +98,12 @@ private:
 
 private:
     ReflectionData ReflectShader(std::span<const uint32_t> spirv, vk::ShaderStageFlagBits stage);
-
     void CompileShader(ShaderId id);
-    void CompileShaders();
 
-    void WriteShaderCache(ShaderId id);
-    void ReadShaderCache(ShaderId id);
-
-private:
     std::filesystem::path GetShaderCachePath(const std::filesystem::path &path);
-};
-
-using PipelineSpecialization = std::pair<uint32_t, uint32_t>;
-
-struct ComputePipelineInfo
-{
-    std::string Name;
-
-    ShaderId ComputeShader;
-
-    // TODO: std::vector<PipelineSpecialization> PipelineSpecializations;
-};
-
-struct GraphicsPipelineInfo
-{
-    struct VertexInput
-    {
-        uint32_t Binding;
-        uint32_t Offset;
-    };
-
-    std::string Name;
-
-    ShaderId VertexShaderId;
-    ShaderId FragmentShaderId;
-
-    std::vector<vk::VertexInputBindingDescription> BindingDescriptions;
-    std::vector<VertexInput> VertexInputs;
-    std::vector<vk::Format> ColorAttachmentFormats;
-    vk::Format DepthAttachmentFormat = vk::Format::eUndefined;
-    vk::Format StencilAttachmentFormat = vk::Format::eUndefined;
-
-    vk::PipelineInputAssemblyStateCreateInfo InputAssemblyState;
-    vk::PipelineMultisampleStateCreateInfo MultisampleState;
-    vk::PipelineRasterizationStateCreateInfo RasterizationState;
-    vk::PipelineDepthStencilStateCreateInfo DepthStencilState;
-    std::vector<vk::PipelineColorBlendAttachmentState> AttachmentBlendStates;
-
-    // TODO: std::vector<PipelineSpecialization> PipelineSpecializations;
-};
-
-struct Pipeline
-{
-    ref::vulkan::DescriptorSetBuilder DescriptorSetBuilder;
-    std::vector<vk::PushConstantRange> PushConstants;
-    vk::PipelineLayout Layout;
-    vk::Pipeline Handle;
-
-    bool IsValid() const;
-};
-
-using ComputePipelineId = IdType<size_t, ComputePipelineInfo>;
-using GraphicsPipelineId = IdType<size_t, GraphicsPipelineInfo>;
-
-class PipelineLibrary
-{
-public:
-    PipelineLibrary(vk::Device logicalDevice, ShaderLibrary *shaderLibrary);
-
-    PipelineLibrary(const PipelineLibrary &) = delete;
-    PipelineLibrary &operator=(const PipelineLibrary &) = delete;
-
-    ComputePipelineId AddPipeline(ComputePipelineInfo pipelineInfo);
-    GraphicsPipelineId AddPipeline(GraphicsPipelineInfo pipelineInfo);
-
-    bool CompilePipeline(ComputePipelineId id);
-    bool CompilePipeline(GraphicsPipelineId id);
-    bool CompilePipelines();
-
-    const Pipeline &GetPipeline(ComputePipelineId id) const;
-    const Pipeline &GetPipeline(GraphicsPipelineId id) const;
-
-private:
-    vk::Device m_LogicalDevice;
-    ShaderLibrary *m_ShaderLibrary;
-
-    std::vector<std::pair<ComputePipelineInfo, size_t>> m_ComputePipelineInfos;
-    std::vector<std::pair<GraphicsPipelineInfo, size_t>> m_GraphicsPipelineInfos;
-
-    std::vector<Pipeline> m_Pipelines;
+    std::filesystem::file_time_type GetUpdateTime(ShaderId id) const;
+    std::filesystem::file_time_type GetLastWriteTimeOrMin(const std::filesystem::path &path) const;
+    std::filesystem::file_time_type GetLastWriteTimeOrMax(const std::filesystem::path &path) const;
 };
 
 }

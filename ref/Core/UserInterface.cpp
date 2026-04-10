@@ -1,6 +1,6 @@
 #include <GLFW/glfw3.h>
-#include <backends/imgui_impl_vulkan.h>
 #include <backends/imgui_impl_glfw.h>
+#include <backends/imgui_impl_vulkan.h>
 #include <imgui.h>
 
 #include "Core.h"
@@ -17,7 +17,10 @@ void DefaultUserInterfaceCheckVulkanResultCallback(VkResult result)
     logger::error("ImGui Vulkan Error: {}", vk::to_string(static_cast<vk::Result>(result)));
 }
 
-static Key GetKey(int key)
+namespace
+{
+
+Key ToKey(int key)
 {
     switch (key)
     {
@@ -25,20 +28,100 @@ static Key GetKey(int key)
         return Key::Space;
     case GLFW_KEY_H:
         return Key::H;
+    case GLFW_KEY_W:
+        return Key::W;
+    case GLFW_KEY_A:
+        return Key::A;
+    case GLFW_KEY_S:
+        return Key::S;
+    case GLFW_KEY_D:
+        return Key::D;
+    case GLFW_KEY_Q:
+        return Key::Q;
+    case GLFW_KEY_E:
+        return Key::E;
     default:
         return Key::Unknown;
     }
 }
 
-static void GlfwKeyCallback(GLFWwindow * /*window*/, int key, int /*scancode*/, int action, int /*mods*/)
+KeyAction ToKeyAction(int action)
 {
-    if (action == GLFW_RELEASE)
-        UserInterface::EmitKeyRelease(GetKey(key));
+    switch (action)
+    {
+    case GLFW_PRESS:
+        return KeyAction::Press;
+    case GLFW_RELEASE:
+        return KeyAction::Release;
+    case GLFW_REPEAT:
+        return KeyAction::Repeat;
+    default:
+        std::terminate();
+    }
 }
 
-void UserInterface::EmitKeyRelease(Key key)
+Button ToButton(int button)
 {
-    s_Instance->m_State->OnKeyRelease(key);
+    switch (button)
+    {
+    case GLFW_MOUSE_BUTTON_LEFT:
+        return Button::Left;
+    case GLFW_MOUSE_BUTTON_RIGHT:
+        return Button::Right;
+    case GLFW_MOUSE_BUTTON_MIDDLE:
+        return Button::Middle;
+    default:
+        return Button::Unknown;
+    }
+}
+
+ButtonAction ToButtonAction(int action)
+{
+    switch (action)
+    {
+    case GLFW_PRESS:
+        return ButtonAction::Press;
+    case GLFW_RELEASE:
+        return ButtonAction::Release;
+    default:
+        std::terminate();
+    }
+}
+
+Mods ToMods(int mods)
+{
+    return {
+        .Shift = (mods & GLFW_MOD_SHIFT) != GLFW_FALSE,
+        .Control = (mods & GLFW_MOD_CONTROL) != GLFW_FALSE,
+        .Alt = (mods & GLFW_MOD_ALT) != GLFW_FALSE,
+        .Super = (mods & GLFW_MOD_SUPER) != GLFW_FALSE,
+        .CapsLock = (mods & GLFW_MOD_CAPS_LOCK) != GLFW_FALSE,
+        .NumLock = (mods & GLFW_MOD_NUM_LOCK) != GLFW_FALSE,
+    };
+}
+
+}
+
+void UserInterface::EmitKeyEvent(
+    [[maybe_unused]] GLFWwindow *window, int key, [[maybe_unused]] int scancode, int action, int mods
+)
+{
+    if (s_Instance != nullptr)
+        s_Instance->m_State.OnKeyEvent(ToKey(key), ToKeyAction(action), ToMods(mods));
+}
+
+void UserInterface::EmitMouseButtonEvent(
+    [[maybe_unused]] GLFWwindow *window, int button, int action, int mods
+)
+{
+    if (s_Instance != nullptr)
+        s_Instance->m_State.OnMouseButtonEvent(ToButton(button), ToButtonAction(action), ToMods(mods));
+}
+
+void UserInterface::EmitCursorMoveEvent([[maybe_unused]] GLFWwindow *window, double xpos, double ypos)
+{
+    if (s_Instance != nullptr)
+        s_Instance->m_State.OnCursorMoveEvent(xpos, ypos);
 }
 
 void UserInterface::InitSystem()
@@ -52,8 +135,8 @@ void UserInterface::ShutdownSystem()
     ImGui::DestroyContext();
 }
 
-UserInterface::UserInterface(UserInterfaceVulkanSpec spec, std::unique_ptr<UserInterfaceState> state)
-    : m_VulkanSpec(spec), m_State(std::move(state))
+UserInterface::UserInterface(UserInterfaceVulkanSpec spec, UserInterfaceState &state)
+    : m_VulkanSpec(spec), m_State(state)
 {
 }
 
@@ -70,7 +153,7 @@ void UserInterface::OnUpdate(float timeStep)
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
-    m_State->OnUpdate(timeStep);
+    m_State.OnUpdate(timeStep);
     ImGui::EndFrame();
     ImGui::UpdatePlatformWindows();
 }
@@ -95,7 +178,9 @@ void UserInterface::SetInstance(UserInterface *instance)
 
 void UserInterface::OnActivateVulkan()
 {
-    glfwSetKeyCallback(m_VulkanSpec.Window, GlfwKeyCallback);
+    glfwSetKeyCallback(m_VulkanSpec.Window, UserInterface::EmitKeyEvent);
+    glfwSetMouseButtonCallback(m_VulkanSpec.Window, UserInterface::EmitMouseButtonEvent);
+    glfwSetCursorPosCallback(m_VulkanSpec.Window, UserInterface::EmitCursorMoveEvent);
 
     ImGui_ImplGlfw_InitForVulkan(m_VulkanSpec.Window, true);
     ImGui_ImplVulkan_InitInfo initInfo = {
@@ -119,12 +204,12 @@ void UserInterface::OnActivateVulkan()
     if (imguiResult == false)
         throw std::runtime_error("Failed to initialize ImGui");
 
-    m_State->OnInit();
+    m_State.OnInit();
 }
 
 void UserInterface::OnDeactivateVulkan()
 {
-    m_State->OnShutdown();
+    m_State.OnShutdown();
 
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();

@@ -1,8 +1,8 @@
-#include "Core/Core.h"
+#include <Core/Core.h>
 
-#include "Vulkan/Application.h"
-#include "Vulkan/ApplicationBuilder.h"
-#include "Vulkan/ApplicationState.h"
+#include <Vulkan/Application.h>
+#include <Vulkan/ApplicationBuilder.h>
+#include <Vulkan/ApplicationState.h>
 
 #include "DemoApplicationStates.h"
 
@@ -19,14 +19,21 @@ int main()
 
     {
         vulkan::Application application = builder.CreateApplication("REF");
+        application.GetShaderLibrary().SetShaderCachePath("ShaderCache");
+        application.GetShaderLibrary().AddShadersFromDirectory("Shaders");
+
         vulkan::ErrorApplicationState::AddToApplication(application);
+        vulkan::CompilingShadersApplicationState::AddToApplication(application, "Swapchain Demo State");
+
         application.AddAndCreateState<vulkan::SwapchainApplicationState>("Swapchain Demo State");
         application.AddAndCreateState<vulkan::CubeApplicationState>("Cube Demo State");
         application.AddAndCreateState<vulkan::ParticleApplicationState>("Particle Demo State");
         application.AddAndCreateState<vulkan::TriangleApplicationState>("Triangle Demo State");
         application.AddAndCreateState<vulkan::ComputeApplicationState>("Compute Demo State");
 
-        application.Run("Swapchain Demo State");
+        application.Run(vulkan::CompilingShadersApplicationState::g_StateName);
+
+        application.GetShaderLibrary().PruneShaderCache();
     }
 
     vulkan::ApplicationBuilder::ShutdownSystems();

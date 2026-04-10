@@ -218,7 +218,7 @@ void FrameGraph::OnUpdate(float /* timeStep */)
     };
 
     for (const auto &execution : m_PassExecutions)
-        Dispatch<updateDescriptors>(execution, this, execution, isFrameCountChanged);
+        Dispatch(execution, updateDescriptors, this, execution, isFrameCountChanged);
 
     m_BuffersToUpdate.clear();
     m_ImagesToUpdate.clear();
@@ -231,7 +231,7 @@ void FrameGraph::UpdateDescriptors(P &pass, const PassExecution &execution, bool
     {
         pass.Set = m_PipelineLibrary->GetPipeline(pass.Spec.Pipeline)
                        .DescriptorSetBuilder.CreateSetUnique(m_RenderingResourcesCount);
-        logger::debug(
+        logger::trace(
             "Recreating descriptor sets for pass {} (new set count: {})", execution.Name,
             m_RenderingResourcesCount
         );
@@ -253,7 +253,7 @@ void FrameGraph::UpdateDescriptors(P &pass, const PassExecution &execution, bool
             );
         }
 
-        logger::debug(
+        logger::trace(
             "Pass `{}` binds buffer resource `{}` (range: [{}, {}]) at set 0 and binding {}", execution.Name,
             binding.BufferResource, binding.Offset, end, binding.Binding
         );
@@ -273,7 +273,7 @@ void FrameGraph::UpdateDescriptors(P &pass, const PassExecution &execution, bool
             pass.Set->UpdateImage(binding.Binding, frameInFlight, view, binding.Sampler, layout);
         }
 
-        logger::debug(
+        logger::trace(
             "Pass `{}` binds image resource `{}` at set 0 and binding {}", execution.Name,
             binding.ImageResource, binding.Binding
         );
@@ -338,17 +338,11 @@ template<typename P> void FrameGraph::ExecutePass(const P &pass, vk::CommandBuff
     if constexpr (HasBindings<S>)
     {
         const auto &pipeline = m_PipelineLibrary->GetPipeline(spec.Pipeline);
-        commandBuffer.bindPipeline(P::BindPoint, pipeline.Handle);
+        const auto &pipelineInstance = m_PipelineLibrary->GetPipelineInstance(spec.Pipeline);
+        commandBuffer.bindPipeline(P::BindPoint, pipelineInstance.Handle);
         commandBuffer.bindDescriptorSets(
             P::BindPoint, pipeline.Layout, 0, pass.Set->GetSet(m_FrameInfo.FrameInFlightIndex), {}
         );
-
-        for (const auto pc : pipeline.PushConstants)
-            commandBuffer.pushConstants(
-                pipeline.Layout, pc.stageFlags, pc.offset,
-                static_cast<uint32_t>(spec.PushConstantData.size_bytes() - pc.offset),
-                spec.PushConstantData.data() + pc.offset
-            );
     }
 
     if constexpr (HasScissors<S>)
@@ -363,9 +357,10 @@ template<typename P> void FrameGraph::ExecutePass(const P &pass, vk::CommandBuff
 
     if constexpr (HasVertexBuffers<S>)
     {
-        commandBuffer.bindVertexBuffers(
-            spec.VertexBuffers.FirstBinding, pass.VertexBuffers, pass.VertexBufferOffsets
-        );
+        if (!pass.VertexBuffers.empty())
+            commandBuffer.bindVertexBuffers(
+                spec.VertexBuffers.FirstBinding, pass.VertexBuffers, pass.VertexBufferOffsets
+            );
     }
 
     if constexpr (HasIndexBuffer<S>)
@@ -454,7 +449,7 @@ void FrameGraph::OnRender(vk::CommandBuffer commandBuffer)
             frameGraph->SetupPass(pass, execution);
         };
 
-        Dispatch<setupPass>(execution, this, execution);
+        Dispatch(execution, setupPass, this, execution);
     }
 
     for (const auto &execution : m_PassExecutions)
@@ -476,7 +471,7 @@ void FrameGraph::OnRender(vk::CommandBuffer commandBuffer)
             frameGraph->ExecutePass(pass, commandBuffer);
         };
 
-        Dispatch<executePass>(execution, this, commandBuffer);
+        Dispatch(execution, executePass, this, commandBuffer);
 #if defined(REF_CONFIG_DEBUG) || defined(REF_CONFIG_TRACE) || defined(REF_CONFIG_PROFILE)
         commandBuffer.endDebugUtilsLabelEXT(
             *Application::GetInstance()->GetApplicationStateSpec().DispatchLoader
@@ -554,6 +549,21 @@ vk::ImageView FrameGraph::GetImageViewHandle(const std::string &name, uint32_t f
     return m_ResourceAllocator->GetImageViewResource(imageId.second).Handle;
 }
 
+template<typename P, typename D>
+void FrameGraph::SetPushConstants(vk::CommandBuffer commandBuffer, const P &pass, const D &draw)
+{
+    const auto &spec = pass.Spec;
+    const auto &pipeline = m_PipelineLibrary->GetPipeline(spec.Pipeline);
+
+    if (!draw.PushConstantData.empty())
+        for (const auto pc : pipeline.Reflection.PushConstantRanges)
+            commandBuffer.pushConstants(
+                pipeline.Layout, pc.stageFlags, pc.offset,
+                static_cast<uint32_t>(draw.PushConstantData.size_bytes() - pc.offset),
+                draw.PushConstantData.data() + pc.offset
+            );
+}
+
 void FrameGraph::Execute(vk::CommandBuffer commandBuffer, const ClearPass &pass)
 {
     vk::Image handle = GetImageHandle(pass.Spec.ImageResource);
@@ -575,35 +585,49 @@ void FrameGraph::Execute(vk::CommandBuffer commandBuffer, const BlitPass &pass)
 
 void FrameGraph::Execute(vk::CommandBuffer commandBuffer, const ComputePass &pass)
 {
-    commandBuffer.dispatch(
-        pass.Spec.Command.GroupCountX, pass.Spec.Command.GroupCountY, pass.Spec.Command.GroupCountZ
-    );
+    for (const auto &dispatch : pass.Spec.Dispatches)
+    {
+        SetPushConstants(commandBuffer, pass, dispatch);
+        commandBuffer.dispatch(
+            dispatch.Command.GroupCountX, dispatch.Command.GroupCountY, dispatch.Command.GroupCountZ
+        );
+    }
 }
 
 void FrameGraph::Execute(vk::CommandBuffer commandBuffer, const GraphicsPass &pass)
 {
-    const auto &command = pass.Spec.Command;
-    commandBuffer.draw(
-        command.VertexCount, command.InstanceCount, command.FirstVertex, command.FirstInstance
-    );
+    for (const auto &draw : pass.Spec.Draws)
+    {
+        SetPushConstants(commandBuffer, pass, draw);
+        commandBuffer.draw(
+            draw.Command.VertexCount, draw.Command.InstanceCount, draw.Command.FirstVertex,
+            draw.Command.FirstInstance
+        );
+    }
 }
 
 void FrameGraph::Execute(vk::CommandBuffer commandBuffer, const IndexedGraphicsPass &pass)
 {
-    const auto &command = pass.Spec.Command;
-    commandBuffer.drawIndexed(
-        command.IndexCount, command.InstanceCount, command.FirstIndex, command.VertexOffset,
-        command.FirstInstance
-    );
+    for (const auto &draw : pass.Spec.Draws)
+    {
+        SetPushConstants(commandBuffer, pass, draw);
+        commandBuffer.drawIndexed(
+            draw.Command.IndexCount, draw.Command.InstanceCount, draw.Command.FirstIndex,
+            draw.Command.VertexOffset, draw.Command.FirstInstance
+        );
+    }
 }
 
 void FrameGraph::Execute(vk::CommandBuffer commandBuffer, const IndexedIndirectGraphicsPass &pass)
 {
-    const auto &command = pass.Spec.Command;
-    commandBuffer.drawIndexedIndirect(
-        GetBufferResource(pass.Spec.IndirectBufferResource).first, command.Offset, command.DrawCount,
-        command.Stride
-    );
+    for (const auto &draw : pass.Spec.Draws)
+    {
+        SetPushConstants(commandBuffer, pass, draw);
+        commandBuffer.drawIndexedIndirect(
+            GetBufferResource(pass.Spec.IndirectBufferResource).first, draw.Command.Offset,
+            draw.Command.DrawCount, draw.Command.Stride
+        );
+    }
 }
 
 void FrameGraph::Execute(vk::CommandBuffer commandBuffer, const CustomGraphicsPass &pass)
@@ -623,6 +647,35 @@ std::pair<ImageResourceId, ImageViewResourceId> Image::GetResourceId(uint32_t fr
     if (IsBuffered)
         return Resources[frameInFlight];
     return Resources.front();
+}
+
+template<typename F, typename... Args>
+void FrameGraph::Dispatch(const PassExecution &execution, F &&func, Args &&...args)
+{
+    switch (execution.Type)
+    {
+    case PassType::Clear:
+        func(m_ClearPasses.at(execution.Name), args...);
+        break;
+    case PassType::Blit:
+        func(m_BlitPasses.at(execution.Name), args...);
+        break;
+    case PassType::Compute:
+        func(m_ComputePasses.at(execution.Name), args...);
+        break;
+    case PassType::Graphics:
+        func(m_GraphicsPasses.at(execution.Name), args...);
+        break;
+    case PassType::IndexedGraphics:
+        func(m_IndexedGraphicsPasses.at(execution.Name), args...);
+        break;
+    case PassType::IndexedIndirectGraphics:
+        func(m_IndexedIndirectGraphicsPasses.at(execution.Name), args...);
+        break;
+    case PassType::CustomGraphics:
+        func(m_CustomGraphicsPasses.at(execution.Name), args...);
+        break;
+    }
 }
 
 }

@@ -2,13 +2,16 @@
 #include <spirv_cross/spirv_cross.hpp>
 
 #include <algorithm>
-#include <bit>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <ranges>
 #include <span>
+#include <system_error>
+#include <thread>
 
 #include "Core/Core.h"
+#include "Core/Serialization.h"
 
 #include "Vulkan/Application.h"
 
@@ -30,6 +33,8 @@ shaderc_shader_kind ToShaderKind(vk::ShaderStageFlagBits stage)
         return shaderc_shader_kind::shaderc_fragment_shader;
     case vk::ShaderStageFlagBits::eCompute:
         return shaderc_shader_kind::shaderc_compute_shader;
+    case vk::ShaderStageFlagBits::eGeometry:
+        return shaderc_shader_kind::shaderc_geometry_shader;
     default:
         throw std::runtime_error("Unsupported shader stage");
     }
@@ -47,8 +52,289 @@ vk::Format ToFormat(uint32_t components, spirv_cross::SPIRType::BaseType type)
         return vk::Format::eR32G32B32Sfloat;
     if (type == Type::Float && components == 4)
         return vk::Format::eR32G32B32A32Sfloat;
+    if (type == Type::UInt && components == 1)
+        return vk::Format::eR32Uint;
+    if (type == Type::UInt && components == 2)
+        return vk::Format::eR32G32Uint;
+    if (type == Type::UInt && components == 3)
+        return vk::Format::eR32G32B32Uint;
+    if (type == Type::UInt && components == 4)
+        return vk::Format::eR32G32B32A32Uint;
 
     throw std::runtime_error("Unsupported base type or component count");
+}
+
+struct FileInfo
+{
+    std::filesystem::file_time_type UpdateTime;
+    std::string Path;
+    size_t ContentSize;
+    std::unique_ptr<char[]> Content;
+};
+
+FileInfo ReadFileInfo(const std::filesystem::path &path)
+{
+    std::ifstream file(path, std::ios::ate | std::ios::binary);
+    if (!file.is_open())
+        throw std::runtime_error(std::format("Shader file {} cannot be opened", path.string()));
+
+    size_t size = file.tellg();
+    file.seekg(0);
+
+    auto data = std::make_unique<char[]>(size);
+    file.read(data.get(), size);
+
+    return FileInfo {
+        .UpdateTime = std::filesystem::last_write_time(path),
+        .Path = path.string(),
+        .ContentSize = size,
+        .Content = std::move(data),
+    };
+}
+
+struct IncludeInfo
+{
+    std::set<std::filesystem::path> IncludedFiles;
+    std::filesystem::file_time_type MaxUpdateTime = std::filesystem::file_time_type::min();
+};
+
+class Includer : public shaderc::CompileOptions::IncluderInterface
+{
+public:
+    shaderc_include_result *GetInclude(
+        const char *requested_source, shaderc_include_type type, const char *requesting_source,
+        size_t include_depth
+    ) override;
+
+    void ReleaseInclude(shaderc_include_result *data) override;
+
+    IncludeInfo ClearIncludeInfo();
+
+private:
+    const uint32_t m_MaxIncludeDepth = 5;
+    std::set<std::filesystem::path> m_SystemIncludePaths;
+    IncludeInfo m_IncludeInfo;
+
+private:
+    std::optional<std::filesystem::path> GetFilePath(
+        const char *requested_source, shaderc_include_type type, const char *requesting_source
+    );
+};
+
+shaderc_include_result *Includer::GetInclude(
+    const char *requested_source, shaderc_include_type type, const char *requesting_source,
+    size_t include_depth
+)
+{
+    if (include_depth > m_MaxIncludeDepth)
+    {
+        FileInfo *fileInfo = new FileInfo();
+        fileInfo->Path = std::format("MaxIncludeDepth exceeded {}/{}", include_depth, m_MaxIncludeDepth);
+        logger::warn(fileInfo->Path);
+        return new shaderc_include_result {
+            "", 0, fileInfo->Path.c_str(), fileInfo->Path.size(), fileInfo,
+        };
+    }
+
+    auto filePath = GetFilePath(requested_source, type, requesting_source);
+
+    if (!filePath.has_value())
+    {
+        std::string include = type == shaderc_include_type_standard ? std::format("<{}>", requested_source)
+                                                                    : std::format("\"{}\"", requested_source);
+        FileInfo *fileInfo = new FileInfo();
+        fileInfo->Path = std::format("File not found when including {}", include);
+        return new shaderc_include_result {
+            "", 0, fileInfo->Path.c_str(), fileInfo->Path.size(), fileInfo,
+        };
+    }
+
+    const auto &path = filePath.value();
+
+    if (m_IncludeInfo.IncludedFiles.contains(path))
+    {
+        // File was already included - return empty file as to not include it twice (#pragma once)
+        FileInfo *fileInfo = new FileInfo();
+        fileInfo->Path = path.string();
+        return new shaderc_include_result {
+            fileInfo->Path.c_str(), fileInfo->Path.size(), nullptr, 0, fileInfo,
+        };
+    }
+
+    FileInfo *fileInfo = new FileInfo();
+    *fileInfo = ReadFileInfo(path);
+
+    m_IncludeInfo.IncludedFiles.insert(path);
+    m_IncludeInfo.MaxUpdateTime = std::max(m_IncludeInfo.MaxUpdateTime, fileInfo->UpdateTime);
+
+    return new shaderc_include_result { fileInfo->Path.c_str(), fileInfo->Path.size(),
+                                        fileInfo->Content.get(), fileInfo->ContentSize, nullptr };
+}
+
+void Includer::ReleaseInclude(shaderc_include_result *data)
+{
+    delete static_cast<FileInfo *>(data->user_data);
+    delete data;
+}
+
+IncludeInfo Includer::ClearIncludeInfo()
+{
+    return std::move(m_IncludeInfo);
+}
+
+std::optional<std::filesystem::path> Includer::GetFilePath(
+    const char *requested_source, shaderc_include_type type, const char *requesting_source
+)
+{
+    std::filesystem::path requested(requested_source);
+    std::filesystem::path requesting(requesting_source);
+
+    switch (type)
+    {
+    case shaderc_include_type_relative:
+    {
+        std::filesystem::path relativePath = requesting.remove_filename() / requested;
+        if (std::filesystem::is_regular_file(relativePath))
+            return relativePath;
+        break;
+    }
+    case shaderc_include_type_standard:
+    {
+        for (const std::filesystem::path &path : m_SystemIncludePaths)
+        {
+            std::filesystem::path absolutePath = path / requested;
+            if (std::filesystem::is_regular_file(absolutePath))
+                return absolutePath;
+        }
+        break;
+    }
+    default:
+        std::terminate();
+    }
+
+    return std::optional<std::filesystem::path>();
+}
+
+struct ShaderCacheHeader
+{
+    static inline constexpr uint32_t g_Magic = serialization::MakeMagic("rsch");
+    static inline constexpr uint32_t g_Version = serialization::MakeVersion(0u, 0u, 2u, 0u);
+    static inline constexpr uint64_t g_ItemAlignment = 16;
+
+    uint32_t Magic;
+    uint32_t Version;
+    struct ReflectionInfo
+    {
+        uint32_t PushConstantRangeCount;
+        uint32_t SpecilizationConstantCount;
+        uint32_t BindingCount;
+        uint32_t InputAttributeCount;
+        uint32_t OutputAttributeCount;
+    } Reflection;
+    struct CodeInfo
+    {
+        uint32_t Offset;
+        uint32_t Size;
+    } Code;
+    uint32_t IncludeCount;
+    std::filesystem::file_time_type UpdateTime;
+};
+
+void SerializeShader(const std::filesystem::path &path, const Shader &shader)
+{
+    assert(shader.IsValid());
+    logger::trace("Writing cache for shader {}", path.string());
+
+    auto addOffsetVector = [&](uint64_t &offset, const auto &data) {
+        serialization::AddOffset(offset, ShaderCacheHeader::g_ItemAlignment, std::span(data));
+    };
+
+    uint64_t offset = 0;
+    serialization::AddOffset<ShaderCacheHeader>(offset, ShaderCacheHeader::g_ItemAlignment);
+    addOffsetVector(offset, shader.Reflection.PushConstantRanges);
+    addOffsetVector(offset, shader.Reflection.SpecializationConstantIds);
+    addOffsetVector(offset, shader.Reflection.SetLayoutBindings);
+    addOffsetVector(offset, shader.Reflection.InputAttributes);
+    addOffsetVector(offset, shader.Reflection.OutputAttributes);
+
+    ShaderCacheHeader header = {
+        .Magic = ShaderCacheHeader::g_Magic,
+        .Version = ShaderCacheHeader::g_Version,
+        .Reflection = {
+            .PushConstantRangeCount = static_cast<uint32_t>(shader.Reflection.PushConstantRanges.size()),
+            .SpecilizationConstantCount = static_cast<uint32_t>(shader.Reflection.SpecializationConstantIds.size()),
+            .BindingCount = static_cast<uint32_t>(shader.Reflection.SetLayoutBindings.size()),
+            .InputAttributeCount = static_cast<uint32_t>(shader.Reflection.InputAttributes.size()),
+            .OutputAttributeCount = static_cast<uint32_t>(shader.Reflection.OutputAttributes.size()),
+        },
+        .Code = {
+            .Offset = static_cast<uint32_t>(offset),
+            .Size = static_cast<uint32_t>(shader.Code.size()),
+        },
+        .IncludeCount = static_cast<uint32_t>(shader.Includes.size()),
+        .UpdateTime = shader.UpdateTime,
+    };
+
+    std::ofstream file(path, std::ios::binary | std::ios::out);
+    assert(file.is_open());
+
+    auto serializeVector = [&](const auto &data) {
+        serialization::Serialize(file, ShaderCacheHeader::g_ItemAlignment, std::span(data));
+    };
+
+    serialization::Serialize(file, ShaderCacheHeader::g_ItemAlignment, header);
+    serializeVector(shader.Reflection.PushConstantRanges);
+    serializeVector(shader.Reflection.SpecializationConstantIds);
+    serializeVector(shader.Reflection.SetLayoutBindings);
+    serializeVector(shader.Reflection.InputAttributes);
+    serializeVector(shader.Reflection.OutputAttributes);
+    assert(file.tellp() == header.Code.Offset);
+    serialization::Serialize(file, ShaderCacheHeader::g_ItemAlignment, std::span(shader.Code));
+    for (const auto &include : shader.Includes)
+        file << include;
+
+    logger::info("Successfully written cache for shader `{}`", path.string());
+}
+
+Shader DeserializeShader(const std::filesystem::path &path)
+{
+    logger::trace("Reading shader {} from cache", path.string());
+
+    std::ifstream file(path, std::ios::binary | std::ios::in);
+    assert(file.is_open());
+
+    ShaderCacheHeader header = {};
+    serialization::Deserialize(file, ShaderCacheHeader::g_ItemAlignment, header);
+    assert(header.Magic == ShaderCacheHeader::g_Magic);
+    assert(header.Version == ShaderCacheHeader::g_Version);
+
+    auto deserializeVector = [&](const size_t count, auto &data) {
+        serialization::Deserialize(file, ShaderCacheHeader::g_ItemAlignment, count, data);
+    };
+
+    Shader shader;
+    deserializeVector(header.Reflection.PushConstantRangeCount, shader.Reflection.PushConstantRanges);
+    deserializeVector(
+        header.Reflection.SpecilizationConstantCount, shader.Reflection.SpecializationConstantIds
+    );
+    deserializeVector(header.Reflection.BindingCount, shader.Reflection.SetLayoutBindings);
+    deserializeVector(header.Reflection.InputAttributeCount, shader.Reflection.InputAttributes);
+    deserializeVector(header.Reflection.OutputAttributeCount, shader.Reflection.OutputAttributes);
+    assert(header.Code.Offset == file.tellg());
+    serialization::Deserialize(file, ShaderCacheHeader::g_ItemAlignment, header.Code.Size, shader.Code);
+    shader.UpdateTime = header.UpdateTime;
+    for (uint32_t i = 0; i < header.IncludeCount; i++)
+    {
+        std::filesystem::path include;
+        file >> include;
+        shader.Includes.insert(std::move(include));
+    }
+
+    file.ignore();
+    assert(file.eof());
+
+    logger::info("Successfully read cache for shader `{}`", path.string());
+    return shader;
 }
 
 }
@@ -58,12 +344,87 @@ ShaderLibrary::ShaderLibrary(vk::Device logicalDevice, uint32_t apiVersion)
 {
 }
 
+void ShaderLibrary::SetShaderCachePath(const std::filesystem::path &path)
+{
+    m_ShaderCachePath = path;
+}
+
+void ShaderLibrary::PruneShaderCache()
+{
+    [[maybe_unused]] std::error_code error;
+    for (const auto& entry : std::filesystem::directory_iterator(m_ShaderCachePath, error))
+    {
+        if (!entry.is_regular_file())
+            continue;
+
+        auto it = std::ranges::find_if(m_ShaderInfos, [&entry](const auto &info) {
+            return info.Path.filename().concat(".rsc") == entry.path().filename();
+        });
+
+        if (it != m_ShaderInfos.end())
+            continue;
+
+        if (std::filesystem::remove(entry.path()))
+            logger::info("Removing cache for shader `{}`", entry.path().string());
+    }
+}
+
+void ShaderLibrary::AddShadersFromDirectory(const std::filesystem::path &path)
+{
+    auto extensionToStage =
+        [](const std::filesystem::path &extension) -> std::optional<vk::ShaderStageFlagBits> {
+        if (extension == ".comp")
+            return vk::ShaderStageFlagBits::eCompute;
+        if (extension == ".frag")
+            return vk::ShaderStageFlagBits::eFragment;
+        if (extension == ".vert")
+            return vk::ShaderStageFlagBits::eVertex;
+        if (extension == ".geom")
+            return vk::ShaderStageFlagBits::eGeometry;
+        return std::nullopt;
+    };
+
+    const auto opts = std::filesystem::directory_options::follow_directory_symlink;
+    for (const auto &entry : std::filesystem::recursive_directory_iterator(path, opts))
+    {
+        if (!entry.is_regular_file())
+            continue;
+
+        auto stage = extensionToStage(entry.path().extension());
+        if (!stage.has_value())
+            continue;
+
+        AddShader(ShaderInfo(entry.path(), "main", stage.value()));
+    }
+}
+
+ShaderId ShaderLibrary::GetShaderByPath(const std::filesystem::path &path)
+{
+    auto it = std::ranges::find_if(m_ShaderInfos, [&path](const auto &info) { return info.Path == path; });
+    if (it != m_ShaderInfos.end())
+        return ShaderId(std::distance(m_ShaderInfos.begin(), it));
+
+    return ShaderId();
+}
+
 ShaderId ShaderLibrary::AddShader(ShaderInfo info)
 {
+    {
+        auto it = std::ranges::find_if(m_ShaderInfos, [&info](const auto &other) {
+            return info.Path.filename() == other.Path.filename();
+        });
+        if (it != m_ShaderInfos.end())
+            throw std::runtime_error(
+                std::format(
+                    "Two shaders with the same filename `{}` are not allowed", info.Path.filename().string()
+                )
+            );
+    }
+
     auto it = std::ranges::find_if(m_ShaderInfos, [&info](const auto &other) { return info == other; });
 
     if (it != m_ShaderInfos.end())
-        return std::distance(m_ShaderInfos.begin(), it);
+        return ShaderId(std::distance(m_ShaderInfos.begin(), it));
 
     m_ShaderInfos.push_back(std::move(info));
     m_Shaders.push_back(Shader());
@@ -75,11 +436,22 @@ void ShaderLibrary::LoadShader(ShaderId id)
     const ShaderInfo &info = m_ShaderInfos[id];
     logger::debug("Loading Shader {}", info.Path.string());
 
+    const auto updateTime = GetUpdateTime(id);
+    if (updateTime <= m_Shaders[id].UpdateTime)
+    {
+        logger::debug("Shader {} is already up to date", info.Path.string());
+        return;
+    }
+
+    std::erase_if(m_CompilationFailures, [&id](auto &failure) { return failure.Id == id; });
+
     const std::filesystem::path cache = GetShaderCachePath(info.Path);
-    if (std::filesystem::exists(cache) &&
-        std::filesystem::last_write_time(info.Path) < std::filesystem::last_write_time(cache))
-        ReadShaderCache(id);
-    else
+    if (updateTime < GetLastWriteTimeOrMin(cache))
+        m_Shaders[id] = DeserializeShader(cache);
+
+    // The fact that the shader cache was written after the shader was last modified
+    // does not mean that the cache is up to date but it's a good heuristic initially
+    if (m_Shaders[id].UpdateTime < updateTime)
         CompileShader(id);
 }
 
@@ -89,48 +461,54 @@ void ShaderLibrary::LoadShaders()
         LoadShader(ShaderId(id));
 }
 
-void ShaderLibrary::WriteShaderCache()
+void ShaderLibrary::LoadShadersAsync(uint32_t &total, std::atomic<uint32_t> &progress)
 {
+    total = static_cast<uint32_t>(m_ShaderInfos.size());
+
+    std::thread thread([this, &progress]() {
+        for (size_t id = 0; id < m_ShaderInfos.size(); id++)
+        {
+            progress = static_cast<uint32_t>(id);
+            LoadShader(ShaderId(id));
+        }
+        progress = static_cast<uint32_t>(m_ShaderInfos.size());
+    });
+    thread.detach();
+}
+
+void ShaderLibrary::WriteShaderCaches()
+{
+    std::filesystem::create_directories(m_ShaderCachePath);
+
     for (size_t id = 0; id < m_ShaderInfos.size(); id++)
     {
-        ShaderInfo &info = m_ShaderInfos[id];
+        const ShaderInfo &info = m_ShaderInfos[id];
+        const Shader &shader = m_Shaders[id];
         std::filesystem::path cache = GetShaderCachePath(info.Path);
-        if (m_Shaders[id].IsValid() &&
-            (!std::filesystem::exists(cache) ||
-             std::filesystem::last_write_time(info.Path) > std::filesystem::last_write_time(cache)))
-            WriteShaderCache(ShaderId(id));
+        const auto updateTime = GetUpdateTime(ShaderId(id));
+        if (m_Shaders[id].IsValid() && updateTime <= shader.UpdateTime &&
+            shader.UpdateTime > GetLastWriteTimeOrMin(cache))
+            SerializeShader(cache, shader);
     }
 }
 
 void ShaderLibrary::CompileShader(ShaderId id)
 {
-    std::erase_if(m_CompilationFailures, [&id](auto &failure) { return failure.Id == id; });
-
     const auto &shaderInfo = m_ShaderInfos[id];
 
-    std::vector<char> data;
-    {
-        std::ifstream file(shaderInfo.Path, std::ios::ate | std::ios::binary);
-        if (!file.is_open())
-            throw std::runtime_error(
-                std::format("Shader file {} cannot be opened", shaderInfo.Path.string())
-            );
-
-        size_t size = file.tellg();
-        data.resize(size);
-        file.seekg(0);
-        file.read(data.data(), size);
-        file.close();
-    }
+    FileInfo info = ReadFileInfo(shaderInfo.Path);
+    logger::debug("Compiling shader {}", shaderInfo.Path.string());
 
     shaderc::Compiler compiler;
     shaderc::CompileOptions options;
     options.SetTargetEnvironment(shaderc_target_env::shaderc_target_env_vulkan, m_ApiVersion);
+    Includer *includer = new Includer();
+    options.SetIncluder(std::unique_ptr<Includer>(includer));
 
     const std::string path = shaderInfo.Path.string();
     auto result = compiler.CompileGlslToSpv(
-        data.data(), data.size(), ToShaderKind(shaderInfo.Stage), path.c_str(), shaderInfo.Entry.c_str(),
-        options
+        info.Content.get(), info.ContentSize, ToShaderKind(shaderInfo.Stage), path.c_str(),
+        shaderInfo.Entry.c_str(), options
     );
 
     if (result.GetCompilationStatus() != shaderc_compilation_status::shaderc_compilation_status_success)
@@ -148,14 +526,12 @@ void ShaderLibrary::CompileShader(ShaderId id)
     shader.Reflection = ReflectShader(spv, shaderInfo.Stage);
     shader.Code.assign(spv.begin(), spv.end());
 
+    IncludeInfo includeInfo = includer->ClearIncludeInfo();
+    shader.Includes = std::move(includeInfo.IncludedFiles);
+    shader.UpdateTime = std::max(includeInfo.MaxUpdateTime, info.UpdateTime);
+
     logger::info("Successfully compiled shader `{}`", shaderInfo.Path.string());
     m_Shaders[id] = std::move(shader);
-}
-
-void ShaderLibrary::CompileShaders()
-{
-    for (size_t id = 0; id < m_ShaderInfos.size(); id++)
-        CompileShader(ShaderId(id));
 }
 
 const ShaderInfo &ShaderLibrary::GetShaderInfo(ShaderId id) const
@@ -171,6 +547,31 @@ const Shader &ShaderLibrary::GetShader(ShaderId id) const
 std::span<const ShaderCompilationFailure> ShaderLibrary::GetCompilationFailedShaders() const
 {
     return m_CompilationFailures;
+}
+
+std::filesystem::file_time_type ShaderLibrary::GetUpdateTime(ShaderId id) const
+{
+    auto time = GetLastWriteTimeOrMax(m_ShaderInfos[id].Path);
+    if (m_Shaders[id].Includes.empty())
+        return time;
+
+    auto proj = std::views::transform([this](const auto &p) { return GetLastWriteTimeOrMax(p); });
+    return std::max(time, std::ranges::max(m_Shaders[id].Includes | proj));
+}
+
+std::filesystem::file_time_type ShaderLibrary::GetLastWriteTimeOrMin(const std::filesystem::path &path) const
+{
+    [[maybe_unused]] std::error_code error;
+    return std::filesystem::last_write_time(path, error);
+}
+
+std::filesystem::file_time_type ShaderLibrary::GetLastWriteTimeOrMax(const std::filesystem::path &path) const
+{
+    [[maybe_unused]] std::error_code error;
+    auto time = std::filesystem::last_write_time(path, error);
+    if (time == std::filesystem::file_time_type::min())
+        return std::filesystem::file_time_type::min();
+    return time;
 }
 
 ReflectionData ShaderLibrary::ReflectShader(std::span<const uint32_t> spirv, vk::ShaderStageFlagBits stage)
@@ -245,7 +646,7 @@ ReflectionData ShaderLibrary::ReflectShader(std::span<const uint32_t> spirv, vk:
             size = std::max(size, static_cast<uint32_t>(range.offset + range.range) - offset);
         }
 
-        reflection.PushConstants = { stage, offset, size };
+        reflection.PushConstantRanges = { { stage, offset, size } };
     }
 
     auto specializationConstants = compiler.get_specialization_constants();
@@ -255,439 +656,9 @@ ReflectionData ShaderLibrary::ReflectShader(std::span<const uint32_t> spirv, vk:
     return reflection;
 }
 
-struct ShaderCacheHeader
-{
-    uint32_t Magic;
-    uint32_t Version;
-    struct ReflectionInfo
-    {
-        uint32_t SpecilizationConstantCount;
-        uint32_t BindingCount;
-        uint32_t InputAttributeCount;
-        uint32_t OutputAttributeCount;
-    } Reflection;
-    struct CodeInfo
-    {
-        uint32_t Offset;
-        uint32_t Size;
-    } Code;
-};
-
-namespace
-{
-
-template<typename T> T Align(T value, T alignment)
-{
-    assert(std::has_single_bit(alignment));
-    return (value + alignment - 1) & ~(alignment - 1);
-}
-
-template<typename I, typename T> void AddOffset(T &position, T alignment)
-{
-    position = Align(position + sizeof(I), alignment);
-}
-
-template<typename I, typename T> void AddOffset(T &position, T alignment, std::span<const I> items)
-{
-    position = Align(position + items.size_bytes(), alignment);
-}
-
-static constexpr uint64_t g_Alignment = 16;
-static constexpr std::array<char, g_Alignment> g_Padding = {};
-
-template<typename I, typename T, typename C>
-void Serialize(std::basic_ostream<C> &stream, T alignment, const I &item)
-{
-    stream.write(reinterpret_cast<const C *>(&item), sizeof(I));
-    uint64_t position = stream.tellp();
-    uint64_t paddingSize = Align(position, alignment) - position;
-    stream.write(g_Padding.data(), paddingSize);
-}
-
-template<typename I, typename T, typename C>
-void Serialize(std::basic_ostream<C> &stream, T alignment, std::span<const I> items)
-{
-    stream.write(reinterpret_cast<const C *>(items.data()), items.size_bytes());
-    uint64_t position = stream.tellp();
-    uint64_t paddingSize = Align(position, alignment) - position;
-    stream.write(g_Padding.data(), paddingSize);
-}
-
-template<typename I, typename T, typename C>
-void Deserialize(std::basic_istream<C> &stream, T alignment, I &item)
-{
-    [[maybe_unused]] uint64_t before = stream.tellg();
-    stream.read(reinterpret_cast<C *>(&item), sizeof(I));
-    uint64_t position = stream.tellg();
-    assert(position - before == sizeof(I));
-    uint64_t paddingSize = Align(position, alignment) - position;
-    stream.ignore(paddingSize);
-    [[maybe_unused]] uint64_t after = stream.tellg();
-    assert(after - position == paddingSize);
-}
-
-template<typename I, typename T, typename C>
-void Deserialize(std::basic_istream<C> &stream, T alignment, size_t count, std::vector<I> &items)
-{
-    items.resize(count);
-    [[maybe_unused]] uint64_t before = stream.tellg();
-    stream.read(reinterpret_cast<C *>(items.data()), count * sizeof(I));
-    uint64_t position = stream.tellg();
-    assert(position - before == count * sizeof(I));
-    uint64_t paddingSize = Align(position, alignment) - position;
-    stream.ignore(paddingSize);
-    [[maybe_unused]] uint64_t after = stream.tellg();
-    assert(after - position == paddingSize);
-}
-
-}
-
-constexpr uint32_t g_Magic = 0x72736368;
-constexpr uint32_t g_Version = vk::makeApiVersion(0u, 0u, 1u, 0u);
-
-void ShaderLibrary::WriteShaderCache(ShaderId id)
-{
-    const Shader &shader = m_Shaders[id];
-    const ShaderInfo &shaderInfo = m_ShaderInfos[id];
-    assert(shader.IsValid());
-
-    const std::filesystem::path path = GetShaderCachePath(shaderInfo.Path);
-
-    uint64_t offset = 0;
-    AddOffset<ShaderCacheHeader>(offset, g_Alignment);
-    AddOffset<vk::PushConstantRange>(offset, g_Alignment);
-    AddOffset(offset, g_Alignment, std::span(shader.Reflection.SpecializationConstantIds));
-    AddOffset(offset, g_Alignment, std::span(shader.Reflection.SetLayoutBindings));
-    AddOffset(offset, g_Alignment, std::span(shader.Reflection.InputAttributes));
-    AddOffset(offset, g_Alignment, std::span(shader.Reflection.OutputAttributes));
-
-    ShaderCacheHeader header = {
-        .Magic = g_Magic,
-        .Version = g_Version,
-        .Reflection = {
-            .SpecilizationConstantCount = static_cast<uint32_t>(shader.Reflection.SpecializationConstantIds.size()),
-            .BindingCount = static_cast<uint32_t>(shader.Reflection.SetLayoutBindings.size()),
-            .InputAttributeCount = static_cast<uint32_t>(shader.Reflection.InputAttributes.size()),
-            .OutputAttributeCount = static_cast<uint32_t>(shader.Reflection.OutputAttributes.size()),
-        },
-        .Code = {
-            .Offset = static_cast<uint32_t>(offset),
-            .Size = static_cast<uint32_t>(shader.Code.size()),
-        },
-    };
-
-    std::ofstream file(path, std::ios::binary | std::ios::out);
-    Serialize(file, g_Alignment, header);
-    Serialize(file, g_Alignment, shader.Reflection.PushConstants);
-    assert(file.is_open());
-    Serialize(file, g_Alignment, std::span(shader.Reflection.SpecializationConstantIds));
-    Serialize(file, g_Alignment, std::span(shader.Reflection.SetLayoutBindings));
-    Serialize(file, g_Alignment, std::span(shader.Reflection.InputAttributes));
-    Serialize(file, g_Alignment, std::span(shader.Reflection.OutputAttributes));
-    assert(file.tellp() == header.Code.Offset);
-    Serialize(file, g_Alignment, std::span(shader.Code));
-
-    logger::info("Successfully written cache for shader `{}`", shaderInfo.Path.string());
-}
-
-void ShaderLibrary::ReadShaderCache(ShaderId id)
-{
-    std::erase_if(m_CompilationFailures, [&id](auto &failure) { return failure.Id == id; });
-
-    const ShaderInfo &shaderInfo = m_ShaderInfos[id];
-    const std::filesystem::path path = GetShaderCachePath(shaderInfo.Path);
-    assert(std::filesystem::last_write_time(path) > std::filesystem::last_write_time(shaderInfo.Path));
-
-    std::ifstream file(path, std::ios::binary | std::ios::in);
-    assert(file.is_open());
-
-    ShaderCacheHeader header = {};
-    Deserialize(file, g_Alignment, header);
-    assert(header.Magic == g_Magic);
-    assert(header.Version == g_Version);
-
-    Shader shader;
-    auto &reflection = shader.Reflection;
-    Deserialize(file, g_Alignment, reflection.PushConstants);
-    Deserialize(
-        file, g_Alignment, header.Reflection.SpecilizationConstantCount, reflection.SpecializationConstantIds
-    );
-    Deserialize(file, g_Alignment, header.Reflection.BindingCount, reflection.SetLayoutBindings);
-    Deserialize(file, g_Alignment, header.Reflection.InputAttributeCount, reflection.InputAttributes);
-    Deserialize(file, g_Alignment, header.Reflection.OutputAttributeCount, reflection.OutputAttributes);
-    assert(header.Code.Offset == file.tellg());
-    Deserialize(file, g_Alignment, header.Code.Size, shader.Code);
-
-    file.ignore();
-    assert(file.eof());
-
-    logger::info("Successfully read cache for shader `{}`", shaderInfo.Path.string());
-    m_Shaders[id] = std::move(shader);
-}
-
 std::filesystem::path ShaderLibrary::GetShaderCachePath(const std::filesystem::path &path)
 {
-    std::filesystem::path cache = path;
-    cache.concat(".rsc");
-    return cache;
-}
-
-PipelineLibrary::PipelineLibrary(vk::Device logicalDevice, ShaderLibrary *shaderLibrary)
-    : m_LogicalDevice(logicalDevice), m_ShaderLibrary(shaderLibrary)
-{
-}
-
-ComputePipelineId PipelineLibrary::AddPipeline(ComputePipelineInfo pipelineInfo)
-{
-    m_Pipelines.emplace_back();
-    m_ComputePipelineInfos.emplace_back(std::move(pipelineInfo), m_Pipelines.size() - 1);
-    return m_ComputePipelineInfos.size() - 1;
-}
-
-GraphicsPipelineId PipelineLibrary::AddPipeline(GraphicsPipelineInfo pipelineInfo)
-{
-    m_Pipelines.emplace_back();
-    m_GraphicsPipelineInfos.emplace_back(std::move(pipelineInfo), m_Pipelines.size() - 1);
-    return m_GraphicsPipelineInfos.size() - 1;
-}
-
-bool PipelineLibrary::CompilePipelines()
-{
-    bool result = true;
-    for (size_t i = 0; i < m_ComputePipelineInfos.size(); i++)
-        result &= CompilePipeline(ComputePipelineId(i));
-    for (size_t i = 0; i < m_GraphicsPipelineInfos.size(); i++)
-        result &= CompilePipeline(GraphicsPipelineId(i));
-    return result;
-}
-
-const Pipeline &PipelineLibrary::GetPipeline(ComputePipelineId id) const
-{
-    return m_Pipelines[m_ComputePipelineInfos[id].second];
-}
-
-const Pipeline &PipelineLibrary::GetPipeline(GraphicsPipelineId id) const
-{
-    return m_Pipelines[m_GraphicsPipelineInfos[id].second];
-}
-
-bool PipelineLibrary::CompilePipeline(ComputePipelineId id)
-{
-    const auto &[pipelineInfo, pipelineIndex] = m_ComputePipelineInfos[id];
-    const auto &info = m_ShaderLibrary->GetShaderInfo(pipelineInfo.ComputeShader);
-    const auto &shader = m_ShaderLibrary->GetShader(pipelineInfo.ComputeShader);
-
-    assert(info.Stage == vk::ShaderStageFlagBits::eCompute);
-
-    if (!shader.IsValid())
-    {
-        logger::error(
-            "Cannot compile compute pipeline `{}` because the shader failed compilation", pipelineInfo.Name
-        );
-        m_Pipelines[pipelineIndex] = Pipeline();
-        return false;
-    }
-
-    std::vector<vk::PushConstantRange> pushConstants = { shader.Reflection.PushConstants };
-
-    // TODO: ArraySize Hint
-    DescriptorSetBuilder descriptorSetBuilder(m_LogicalDevice);
-    for (const auto &binding : shader.Reflection.SetLayoutBindings)
-        descriptorSetBuilder.SetDescriptor(binding);
-
-    auto descLayout = descriptorSetBuilder.CreateLayout();
-
-    vk::PipelineLayoutCreateInfo layoutCreateInfo;
-    layoutCreateInfo.setSetLayouts(descLayout);
-    if (shader.Reflection.HasPushConstants())
-        layoutCreateInfo.setPushConstantRanges(shader.Reflection.PushConstants);
-
-    auto layout = m_LogicalDevice.createPipelineLayout(layoutCreateInfo);
-
-    vk::PipelineShaderStageCreateInfo stageInfo(
-        vk::PipelineShaderStageCreateFlags(), info.Stage, nullptr, info.Entry.c_str()
-    );
-    vk::ShaderModuleCreateInfo moduleInfo(vk::ShaderModuleCreateFlags(), shader.Code);
-    auto cs = m_LogicalDevice.createShaderModuleUnique(moduleInfo);
-    stageInfo.setModule(cs.get());
-
-    vk::ComputePipelineCreateInfo computePipelineInfo;
-    computePipelineInfo.setStage(stageInfo);
-    computePipelineInfo.setLayout(layout);
-
-    auto result = m_LogicalDevice.createComputePipeline(nullptr, computePipelineInfo);
-    if (!result.has_value())
-    {
-        logger::error("Compute pipeline `{}` compilation failed", pipelineInfo.Name);
-        m_Pipelines[pipelineIndex] = Pipeline();
-        return false;
-    }
-
-    Application::GetInstance()->SetDebugName(layout, pipelineInfo.Name.c_str());
-    Application::GetInstance()->SetDebugName(result.value, pipelineInfo.Name.c_str());
-
-    logger::info("Successfully compiled compute pipeline `{}`", pipelineInfo.Name);
-    m_Pipelines[pipelineIndex] =
-        Pipeline(std::move(descriptorSetBuilder), std::move(pushConstants), layout, result.value);
-    return true;
-}
-
-bool PipelineLibrary::CompilePipeline(GraphicsPipelineId id)
-{
-    const auto &[pipelineInfo, pipelineIndex] = m_GraphicsPipelineInfos[id];
-    const auto &vertexInfo = m_ShaderLibrary->GetShaderInfo(pipelineInfo.VertexShaderId);
-    const auto &fragmentInfo = m_ShaderLibrary->GetShaderInfo(pipelineInfo.FragmentShaderId);
-    const auto &vertexShader = m_ShaderLibrary->GetShader(pipelineInfo.VertexShaderId);
-    const auto &fragmentShader = m_ShaderLibrary->GetShader(pipelineInfo.FragmentShaderId);
-
-    assert(vertexInfo.Stage == vk::ShaderStageFlagBits::eVertex);
-    assert(fragmentInfo.Stage == vk::ShaderStageFlagBits::eFragment);
-
-    if (!vertexShader.IsValid() || !fragmentShader.IsValid())
-    {
-        logger::error(
-            "Cannot compile graphics pipeline `{}` because the shaders failed compilation", pipelineInfo.Name
-        );
-        m_Pipelines[pipelineIndex] = Pipeline();
-        return false;
-    }
-
-    for (const auto &outputAttribute : vertexShader.Reflection.OutputAttributes)
-        for (const auto &inputAttribute : fragmentShader.Reflection.InputAttributes)
-            if (outputAttribute.Location == inputAttribute.Location &&
-                outputAttribute.Format != inputAttribute.Format)
-                logger::warn(
-                    "In pipeline `{}` attribute at location {} in vertex shader has format {} but in "
-                    "fragment shader has format {}",
-                    pipelineInfo.Name, outputAttribute.Location, vk::to_string(outputAttribute.Format),
-                    vk::to_string(inputAttribute.Format)
-                );
-
-    std::vector<vk::PushConstantRange> pushConstants;
-    if (vertexShader.Reflection.HasPushConstants())
-        pushConstants.push_back(vertexShader.Reflection.PushConstants);
-    if (fragmentShader.Reflection.HasPushConstants())
-        pushConstants.push_back(fragmentShader.Reflection.PushConstants);
-
-    ReflectionData reflection;
-    reflection.Combine(vertexShader.Reflection);
-    reflection.Combine(fragmentShader.Reflection);
-
-    // TODO: ArraySize Hint
-    DescriptorSetBuilder descriptorSetBuilder(m_LogicalDevice);
-    for (const auto &binding : reflection.SetLayoutBindings)
-        descriptorSetBuilder.SetDescriptor(binding);
-
-    auto descLayout = descriptorSetBuilder.CreateLayout();
-
-    vk::PipelineLayoutCreateInfo layoutCreateInfo;
-    layoutCreateInfo.setSetLayouts(descLayout);
-    layoutCreateInfo.setPushConstantRanges(pushConstants);
-
-    auto layout = m_LogicalDevice.createPipelineLayout(layoutCreateInfo);
-
-    std::array<vk::PipelineShaderStageCreateInfo, 2> stageInfos = {
-        vk::PipelineShaderStageCreateInfo(
-            vk::PipelineShaderStageCreateFlags(), vertexInfo.Stage, nullptr, vertexInfo.Entry.c_str()
-        ),
-        vk::PipelineShaderStageCreateInfo(
-            vk::PipelineShaderStageCreateFlags(), fragmentInfo.Stage, nullptr, fragmentInfo.Entry.c_str()
-        ),
-    };
-
-    vk::ShaderModuleCreateInfo vertexModuleInfo(vk::ShaderModuleCreateFlags(), vertexShader.Code);
-    vk::ShaderModuleCreateInfo fragmentModuleInfo(vk::ShaderModuleCreateFlags(), fragmentShader.Code);
-
-    auto vs = m_LogicalDevice.createShaderModuleUnique(vertexModuleInfo);
-    auto fs = m_LogicalDevice.createShaderModuleUnique(fragmentModuleInfo);
-
-    stageInfos[0].setModule(vs.get());
-    stageInfos[1].setModule(fs.get());
-
-    {
-        const size_t required = vertexShader.Reflection.InputAttributes.size();
-        const size_t provided = pipelineInfo.VertexInputs.size();
-        if (required > provided)
-            throw std::runtime_error(
-                std::format(
-                    "Vertex shader requires {} inputs but pipeline {} provided only {}", required,
-                    pipelineInfo.Name, provided
-                )
-            );
-
-        if (required < provided)
-            logger::warn(
-                "Pipeline {} provided {} inputs but vertex shader requires only {}", pipelineInfo.Name,
-                required, provided
-            );
-    }
-
-    std::vector<vk::VertexInputAttributeDescription> attributeDescriptions;
-    for (const auto &attribute : vertexShader.Reflection.InputAttributes)
-    {
-        const auto &input = pipelineInfo.VertexInputs[attribute.Location];
-        attributeDescriptions.emplace_back(attribute.Location, input.Binding, attribute.Format, input.Offset);
-    }
-
-    vk::PipelineVertexInputStateCreateInfo vertexInputState;
-    vertexInputState.setVertexAttributeDescriptions(attributeDescriptions);
-    vertexInputState.setVertexBindingDescriptions(pipelineInfo.BindingDescriptions);
-
-    vk::PipelineViewportStateCreateInfo viewportState;
-    viewportState.setScissorCount(1);
-    viewportState.setViewportCount(1);
-
-    for ([[maybe_unused]] const auto &attribute : fragmentShader.Reflection.OutputAttributes)
-        assert(attribute.Location < pipelineInfo.AttachmentBlendStates.size());
-
-    vk::PipelineColorBlendStateCreateInfo blendState;
-    blendState.setAttachments(pipelineInfo.AttachmentBlendStates);
-
-    vk::PipelineRenderingCreateInfo renderingInfo(
-        0, pipelineInfo.ColorAttachmentFormats, pipelineInfo.DepthAttachmentFormat,
-        pipelineInfo.StencilAttachmentFormat
-    );
-
-    vk::PipelineDynamicStateCreateInfo dynamicState;
-    std::array<vk::DynamicState, 2> dynamicStates = { vk::DynamicState::eViewport,
-                                                      vk::DynamicState::eScissor };
-    dynamicState.setDynamicStates(dynamicStates);
-
-    vk::GraphicsPipelineCreateInfo graphicsPipelineInfo;
-    graphicsPipelineInfo.setPVertexInputState(&vertexInputState);
-    graphicsPipelineInfo.setPInputAssemblyState(&pipelineInfo.InputAssemblyState);
-    graphicsPipelineInfo.setPMultisampleState(&pipelineInfo.MultisampleState);
-    graphicsPipelineInfo.setPRasterizationState(&pipelineInfo.RasterizationState);
-    graphicsPipelineInfo.setPDepthStencilState(&pipelineInfo.DepthStencilState);
-    graphicsPipelineInfo.setPColorBlendState(&blendState);
-    graphicsPipelineInfo.setPViewportState(&viewportState);
-    graphicsPipelineInfo.setPDynamicState(&dynamicState);
-    graphicsPipelineInfo.setStages(stageInfos);
-    graphicsPipelineInfo.setLayout(layout);
-    graphicsPipelineInfo.setPNext(renderingInfo);
-
-    auto result = m_LogicalDevice.createGraphicsPipeline(nullptr, graphicsPipelineInfo);
-    if (!result.has_value())
-    {
-        logger::error("Graphics pipeline `{}` compilation failed", pipelineInfo.Name);
-        m_Pipelines[pipelineIndex] = Pipeline();
-        return false;
-    }
-
-    Application::GetInstance()->SetDebugName(
-        layout, std::format("Pipeline Layout `{}`", pipelineInfo.Name).c_str()
-    );
-    Application::GetInstance()->SetDebugName(result.value, pipelineInfo.Name.c_str());
-
-    logger::info("Successfully compiled graphics pipeline `{}`", pipelineInfo.Name);
-    m_Pipelines[pipelineIndex] =
-        Pipeline(std::move(descriptorSetBuilder), std::move(pushConstants), layout, result.value);
-    return true;
-}
-
-bool ReflectionData::HasPushConstants() const
-{
-    return PushConstants.size > 0;
+    return m_ShaderCachePath / path.filename().concat(".rsc");
 }
 
 void ReflectionData::Combine(const ReflectionData &other)
@@ -696,6 +667,9 @@ void ReflectionData::Combine(const ReflectionData &other)
         if (!std::ranges::contains(SpecializationConstantIds, id))
             SpecializationConstantIds.push_back(id);
 
+    for (const auto &range : other.PushConstantRanges)
+        PushConstantRanges.push_back(range);
+
     for (const auto &binding : other.SetLayoutBindings)
     {
         auto it = std::ranges::find(SetLayoutBindings, binding.binding, [](const auto &binding) {
@@ -703,7 +677,12 @@ void ReflectionData::Combine(const ReflectionData &other)
         });
 
         if (it != SetLayoutBindings.end() && *it != binding)
-            throw std::runtime_error(std::format("Binding {} mismatch", binding.binding));
+        {
+            if (it->descriptorCount != binding.descriptorCount ||
+                it->descriptorType != binding.descriptorType)
+                throw std::runtime_error(std::format("Binding {} mismatch", binding.binding));
+            it->stageFlags |= binding.stageFlags;
+        }
         else
             SetLayoutBindings.push_back(binding);
     }
@@ -712,11 +691,6 @@ void ReflectionData::Combine(const ReflectionData &other)
 bool Shader::IsValid() const
 {
     return !Code.empty();
-}
-
-bool Pipeline::IsValid() const
-{
-    return Handle != nullptr;
 }
 
 }
