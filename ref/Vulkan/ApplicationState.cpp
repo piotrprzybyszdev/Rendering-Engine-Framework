@@ -413,7 +413,12 @@ void CompilingShadersApplicationState::OnEnter(ApplicationState * /* previous */
 
     m_Total = 0;
     m_Done = 0;
-    Application::GetInstance()->GetShaderLibrary().LoadShadersAsync(m_Total, m_Done);
+
+    uint32_t threadCount = std::thread::hardware_concurrency();
+    if (threadCount == 0)
+        threadCount = 1;
+
+    Application::GetInstance()->GetShaderLibrary().LoadShadersAsync(m_Total, m_Done, threadCount);
 }
 
 void CompilingShadersApplicationState::OnExit(ApplicationState * /* next */)
@@ -451,14 +456,11 @@ void CompilingShadersApplicationState::OnUpdate([[maybe_unused]] float timeStep)
 
     if (m_Total == m_Done)
     {
-        const auto &failures = Application::GetInstance()->GetShaderLibrary().GetCompilationFailedShaders();
+        auto errors = Application::GetInstance()->GetShaderLibrary().GetCompilationErrors();
 
-        if (!failures.empty())
+        if (!errors.empty())
         {
-            auto &errors = ErrorApplicationState::GetErrors();
-            errors.clear();
-            for (auto &failure : failures)
-                errors.push_back(failure.Error);
+            ErrorApplicationState::GetErrors() = std::vector(errors.begin(), errors.end());
             ErrorApplicationState::SetErrorState(g_StateName);
         }
         else

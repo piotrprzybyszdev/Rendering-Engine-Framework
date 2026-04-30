@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <filesystem>
+#include <ranges>
 #include <set>
 #include <span>
 #include <string>
@@ -48,16 +49,12 @@ struct Shader
     std::set<std::filesystem::path> Includes;
     std::filesystem::file_time_type UpdateTime = std::filesystem::file_time_type::min();
 
+    std::optional<std::string> CompilationError;
+
     bool IsValid() const;
 };
 
 using ShaderId = IdType<size_t, Shader>;
-
-struct ShaderCompilationFailure
-{
-    ShaderId Id;
-    std::string Error;
-};
 
 class ShaderLibrary
 {
@@ -77,14 +74,14 @@ public:
 
     void LoadShader(ShaderId id);
     void LoadShaders();
-    void LoadShadersAsync(uint32_t &total, std::atomic<uint32_t> &done);
+    void LoadShadersAsync(uint32_t &total, std::atomic<uint32_t> &done, uint32_t threadCount);
 
     void WriteShaderCaches();
 
     const ShaderInfo &GetShaderInfo(ShaderId id) const;
     const Shader &GetShader(ShaderId id) const;
 
-    std::span<const ShaderCompilationFailure> GetCompilationFailedShaders() const;
+    auto GetCompilationErrors() const;
 
 private:
     vk::Device m_LogicalDevice;
@@ -93,8 +90,6 @@ private:
 
     std::vector<ShaderInfo> m_ShaderInfos;
     std::vector<Shader> m_Shaders;
-
-    std::vector<ShaderCompilationFailure> m_CompilationFailures;
 
 private:
     ReflectionData ReflectShader(std::span<const uint32_t> spirv, vk::ShaderStageFlagBits stage);
@@ -105,5 +100,12 @@ private:
     std::filesystem::file_time_type GetLastWriteTimeOrMin(const std::filesystem::path &path) const;
     std::filesystem::file_time_type GetLastWriteTimeOrMax(const std::filesystem::path &path) const;
 };
+
+inline auto ShaderLibrary::GetCompilationErrors() const
+{
+    return m_Shaders |
+           std::views::filter([](const auto &shader) { return shader.CompilationError.has_value(); }) |
+           std::views::transform([](const auto &shader) { return shader.CompilationError.value(); });
+}
 
 }

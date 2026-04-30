@@ -443,8 +443,6 @@ void ShaderLibrary::LoadShader(ShaderId id)
         return;
     }
 
-    std::erase_if(m_CompilationFailures, [&id](auto &failure) { return failure.Id == id; });
-
     const std::filesystem::path cache = GetShaderCachePath(info.Path);
     if (updateTime < GetLastWriteTimeOrMin(cache))
         m_Shaders[id] = DeserializeShader(cache);
@@ -461,19 +459,30 @@ void ShaderLibrary::LoadShaders()
         LoadShader(ShaderId(id));
 }
 
-void ShaderLibrary::LoadShadersAsync(uint32_t &total, std::atomic<uint32_t> &progress)
+void ShaderLibrary::LoadShadersAsync(uint32_t &total, std::atomic<uint32_t> &done, uint32_t threadCount)
 {
     total = static_cast<uint32_t>(m_ShaderInfos.size());
 
-    std::thread thread([this, &progress]() {
-        for (size_t id = 0; id < m_ShaderInfos.size(); id++)
+    std::thread mainThread([threadCount, &done, this]() {
+        std::atomic<uint32_t> index = 0;
+        std::vector<std::thread> threads;
+
+        for (uint32_t i = 0; i < threadCount; i++)
         {
-            progress = static_cast<uint32_t>(id);
-            LoadShader(ShaderId(id));
+            threads.push_back(std::thread([threadCount, &done, &index, this]() {
+                uint32_t id;
+                while ((id = index++) < m_ShaderInfos.size())
+                {
+                    LoadShader(ShaderId(id));
+                    done++;
+                }
+            }));
         }
-        progress = static_cast<uint32_t>(m_ShaderInfos.size());
+
+        for (auto &thread : threads)
+            thread.join();
     });
-    thread.detach();
+    mainThread.detach();
 }
 
 void ShaderLibrary::WriteShaderCaches()
@@ -516,8 +525,10 @@ void ShaderLibrary::CompileShader(ShaderId id)
 
     if (result.GetCompilationStatus() != shaderc_compilation_status::shaderc_compilation_status_success)
     {
-        m_Shaders[id] = { .UpdateTime = updateTime };
-        m_CompilationFailures.push_back(ShaderCompilationFailure(id, result.GetErrorMessage()));
+        m_Shaders[id] = {
+            .UpdateTime = updateTime,
+            .CompilationError = result.GetErrorMessage(),
+        };
         logger::error("Shader `{}` failed compilation", shaderInfo.Path.string());
         logger::error("{}", result.GetErrorMessage());
         return;
@@ -525,15 +536,13 @@ void ShaderLibrary::CompileShader(ShaderId id)
 
     const auto spv = std::span(result);
 
-    Shader shader = {
+    logger::info("Successfully compiled shader `{}`", shaderInfo.Path.string());
+    m_Shaders[id] = {
         .Code = std::vector(spv.begin(), spv.end()),
         .Reflection = ReflectShader(spv, shaderInfo.Stage),
         .Includes = std::move(includeInfo.IncludedFiles),
         .UpdateTime = updateTime,
     };
-
-    logger::info("Successfully compiled shader `{}`", shaderInfo.Path.string());
-    m_Shaders[id] = std::move(shader);
 }
 
 const ShaderInfo &ShaderLibrary::GetShaderInfo(ShaderId id) const
@@ -544,11 +553,6 @@ const ShaderInfo &ShaderLibrary::GetShaderInfo(ShaderId id) const
 const Shader &ShaderLibrary::GetShader(ShaderId id) const
 {
     return m_Shaders[id];
-}
-
-std::span<const ShaderCompilationFailure> ShaderLibrary::GetCompilationFailedShaders() const
-{
-    return m_CompilationFailures;
 }
 
 std::filesystem::file_time_type ShaderLibrary::GetUpdateTime(ShaderId id) const

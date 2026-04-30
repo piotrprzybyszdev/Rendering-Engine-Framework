@@ -190,11 +190,8 @@ bool DemoApplicationState::EnsurePipelinesCompiled(std::initializer_list<Graphic
 
 void DemoApplicationState::SetShaderErrors()
 {
-    ShaderLibrary &shaderLibrary = Application::GetInstance()->GetShaderLibrary();
-    auto &errors = ErrorApplicationState::GetErrors();
-    errors.clear();
-    for (auto &failure : shaderLibrary.GetCompilationFailedShaders())
-        errors.push_back(failure.Error);
+    auto errors = Application::GetInstance()->GetShaderLibrary().GetCompilationErrors();
+    ErrorApplicationState::GetErrors() = std::vector(errors.begin(), errors.end());
     ErrorApplicationState::SetErrorState(m_State);
 }
 
@@ -231,10 +228,8 @@ void ComputeApplicationState::OnEnter(ApplicationState *previous)
     bool success = m_PipelineLibrary->CompilePipelineInstance(m_PipelineId);
     if (!success)
     {
-        auto &errors = ErrorApplicationState::GetErrors();
-        errors.clear();
-        for (auto &failure : m_ShaderLibrary->GetCompilationFailedShaders())
-            errors.push_back(failure.Error);
+        auto errors = Application::GetInstance()->GetShaderLibrary().GetCompilationErrors();
+        ErrorApplicationState::GetErrors() = std::vector(errors.begin(), errors.end());
         ErrorApplicationState::SetErrorState("Compute Demo State");
         return;
     }
@@ -314,10 +309,8 @@ void ComputeApplicationState::OnUpdate(float timeStep)
         bool success = m_PipelineLibrary->CompilePipelineInstance(m_PipelineId);
         if (!success)
         {
-            auto &errors = ErrorApplicationState::GetErrors();
-            errors.clear();
-            for (auto &failure : m_ShaderLibrary->GetCompilationFailedShaders())
-                errors.push_back(failure.Error);
+            auto errors = Application::GetInstance()->GetShaderLibrary().GetCompilationErrors();
+            ErrorApplicationState::GetErrors() = std::vector(errors.begin(), errors.end());
             ErrorApplicationState::SetErrorState("Compute Demo State");
             return;
         }
