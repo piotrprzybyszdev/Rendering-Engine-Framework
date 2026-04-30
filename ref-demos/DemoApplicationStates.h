@@ -14,13 +14,13 @@
 namespace ref::vulkan
 {
 
-class DemoUserInterfaceState : public UserInterfaceState
+class DemoUserInterface : public UserInterface
 {
 public:
-    DemoUserInterfaceState() = default;
-    ~DemoUserInterfaceState() override = default;
+    DemoUserInterface(UserInterfaceVulkanSpec spec);
+    ~DemoUserInterface() override = default;
 
-    void OnUpdate(float timeStep) override;
+    void OnDefineUI(float timeStep) override;
 
     static void AddState(const std::string &name);
 
@@ -48,8 +48,7 @@ protected:
 
 protected:
     std::unique_ptr<ResourceAllocator> m_ResourceAllocator;
-    std::unique_ptr<DemoUserInterfaceState> m_UserInterfaceState;
-    std::unique_ptr<UserInterface> m_UserInterface;
+    std::unique_ptr<DemoUserInterface> m_UserInterface;
     std::unique_ptr<FrameGraph> m_FrameGraph;
     std::unique_ptr<Renderer> m_Renderer;
 
@@ -167,13 +166,13 @@ private:
     float m_CubeAngle = 0.0f;
 };
 
-class SwapchainUserInterfaceState final : public DemoUserInterfaceState
+class SwapchainUserInterface final : public DemoUserInterface
 {
 public:
-    SwapchainUserInterfaceState(SwapchainBuilder *swapchainBuilder, vk::Format format, uint32_t imageCount);
-    ~SwapchainUserInterfaceState() override = default;
+    SwapchainUserInterface(UserInterfaceVulkanSpec spec, SwapchainBuilder *swapchainBuilder, vk::Format format, uint32_t imageCount);
+    ~SwapchainUserInterface() override = default;
 
-    void OnUpdate(float timeStep) override;
+    void OnDefineUI(float timeStep) override;
 
     vk::Format GetFormat() const;
     uint32_t GetImageCount() const;
@@ -201,12 +200,10 @@ public:
 
 private:
     vk::Device m_LogicalDevice;
-    ResourceManagerSpec m_ResourceManagerSpec;
     Queue m_MainQueue;
     PipelineLibrary *m_PipelineLibrary;
 
-    std::unique_ptr<SwapchainUserInterfaceState> m_UserInterfaceState;
-    std::unique_ptr<UserInterface> m_UserInterface;
+    std::unique_ptr<SwapchainUserInterface> m_UserInterface;
     std::unique_ptr<FrameGraph> m_FrameGraph;
     std::unique_ptr<Renderer> m_Renderer;
     std::unique_ptr<ResourceAllocator> m_ResourceAllocator;

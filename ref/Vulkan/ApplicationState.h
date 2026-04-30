@@ -52,16 +52,18 @@ public:
     virtual void OnRender() = 0;
 };
 
-class ErrorUserInterfaceState final : public UserInterfaceState
+class ErrorUserInterface final : public UserInterface
 {
 public:
-    ErrorUserInterfaceState(const std::vector<std::string> &errors, const std::string &state);
-    ~ErrorUserInterfaceState() = default;
+    ErrorUserInterface(
+        UserInterfaceVulkanSpec spec, const std::vector<std::string> &errors, const std::string &state
+    );
+    ~ErrorUserInterface() override = default;
 
-    void OnInit() override;
-    void OnShutdown() override;
+    void OnEnter() override;
+    void OnExit() override;
 
-    void OnUpdate(float timeStep) override;
+    void OnDefineUI(float timeStep) override;
     virtual void OnKeyEvent(Key key, KeyAction action, Mods mods) override;
 
 private:
@@ -93,12 +95,10 @@ public:
 
 private:
     vk::Device m_LogicalDevice;
-    ResourceManagerSpec m_ResourceManagerSpec;
     Queue m_MainQueue;
 
     std::unique_ptr<ResourceAllocator> m_ResourceAllocator;
-    std::unique_ptr<ErrorUserInterfaceState> m_UserInterfaceState;
-    std::unique_ptr<UserInterface> m_UserInterface;
+    std::unique_ptr<ErrorUserInterface> m_UserInterface;
     std::unique_ptr<FrameGraph> m_FrameGraph;
     std::unique_ptr<Renderer> m_Renderer;
 
@@ -107,16 +107,16 @@ private:
     inline static std::string m_State;
 };
 
-class CompilingShadersUserInterfaceState final : public UserInterfaceState
+class CompilingShadersUserInterface final : public UserInterface
 {
 public:
-    CompilingShadersUserInterfaceState();
-    ~CompilingShadersUserInterfaceState() = default;
+    CompilingShadersUserInterface(UserInterfaceVulkanSpec spec);
+    ~CompilingShadersUserInterface() override = default;
 
-    void OnInit() override;
-    void OnShutdown() override;
+    void OnEnter() override;
+    void OnExit() override;
 
-    void OnUpdate(float timeStep) override;
+    void OnDefineUI(float timeStep) override;
 
     void SetProgress(uint32_t total, uint32_t done);
 
@@ -148,12 +148,10 @@ public:
 
 private:
     vk::Device m_LogicalDevice;
-    ResourceManagerSpec m_ResourceManagerSpec;
     Queue m_MainQueue;
 
     std::unique_ptr<ResourceAllocator> m_ResourceAllocator;
-    std::unique_ptr<CompilingShadersUserInterfaceState> m_UserInterfaceState;
-    std::unique_ptr<UserInterface> m_UserInterface;
+    std::unique_ptr<CompilingShadersUserInterface> m_UserInterface;
     std::unique_ptr<FrameGraph> m_FrameGraph;
     std::unique_ptr<Renderer> m_Renderer;
 

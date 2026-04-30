@@ -107,7 +107,7 @@ void UserInterface::EmitKeyEvent(
 )
 {
     if (s_Instance != nullptr)
-        s_Instance->m_State.OnKeyEvent(ToKey(key), ToKeyAction(action), ToMods(mods));
+        s_Instance->OnKeyEvent(ToKey(key), ToKeyAction(action), ToMods(mods));
 }
 
 void UserInterface::EmitMouseButtonEvent(
@@ -115,13 +115,13 @@ void UserInterface::EmitMouseButtonEvent(
 )
 {
     if (s_Instance != nullptr)
-        s_Instance->m_State.OnMouseButtonEvent(ToButton(button), ToButtonAction(action), ToMods(mods));
+        s_Instance->OnMouseButtonEvent(ToButton(button), ToButtonAction(action), ToMods(mods));
 }
 
 void UserInterface::EmitCursorMoveEvent([[maybe_unused]] GLFWwindow *window, double xpos, double ypos)
 {
     if (s_Instance != nullptr)
-        s_Instance->m_State.OnCursorMoveEvent(xpos, ypos);
+        s_Instance->OnCursorMoveEvent(xpos, ypos);
 }
 
 void UserInterface::InitSystem()
@@ -135,25 +135,14 @@ void UserInterface::ShutdownSystem()
     ImGui::DestroyContext();
 }
 
-UserInterface::UserInterface(UserInterfaceVulkanSpec spec, UserInterfaceState &state)
-    : m_VulkanSpec(spec), m_State(state)
-{
-}
-
-UserInterface::~UserInterface()
-{
-    if (s_Instance == this)
-        SetInstance(nullptr);
-}
+UserInterface::UserInterface(UserInterfaceVulkanSpec spec) : m_VulkanSpec(spec) {}
 
 void UserInterface::OnUpdate(float timeStep)
 {
-    SetInstance(this);
-
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
-    m_State.OnUpdate(timeStep);
+    OnDefineUI(timeStep);
     ImGui::EndFrame();
     ImGui::UpdatePlatformWindows();
 }
@@ -165,19 +154,11 @@ void UserInterface::OnRenderVulkan(vk::CommandBuffer commandBuffer)
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
 }
 
-void UserInterface::SetInstance(UserInterface *instance)
+void UserInterface::OnEnter()
 {
-    if (s_Instance == instance)
-        return;
-    if (s_Instance != nullptr)
-        s_Instance->OnDeactivateVulkan();
-    if (instance != nullptr)
-        instance->OnActivateVulkan();
-    s_Instance = instance;
-}
+    assert(s_Instance == nullptr);
+    s_Instance = this;
 
-void UserInterface::OnActivateVulkan()
-{
     glfwSetKeyCallback(m_VulkanSpec.Window, UserInterface::EmitKeyEvent);
     glfwSetMouseButtonCallback(m_VulkanSpec.Window, UserInterface::EmitMouseButtonEvent);
     glfwSetCursorPosCallback(m_VulkanSpec.Window, UserInterface::EmitCursorMoveEvent);
@@ -203,16 +184,14 @@ void UserInterface::OnActivateVulkan()
     bool imguiResult = ImGui_ImplVulkan_Init(&initInfo);
     if (imguiResult == false)
         throw std::runtime_error("Failed to initialize ImGui");
-
-    m_State.OnInit();
 }
 
-void UserInterface::OnDeactivateVulkan()
+void UserInterface::OnExit()
 {
-    m_State.OnShutdown();
-
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
+
+    s_Instance = nullptr;
 }
 
 }

@@ -38,25 +38,27 @@ vk::Format GetSurfaceFormat(SwapchainBuilder *swapchainBuilder)
 }
 }
 
-ErrorUserInterfaceState::ErrorUserInterfaceState(
-    const std::vector<std::string> &errors, const std::string &state
+ErrorUserInterface::ErrorUserInterface(
+    UserInterfaceVulkanSpec spec, const std::vector<std::string> &errors, const std::string &state
 )
-    : m_Errors(errors), m_State(state)
+    : UserInterface(spec), m_Errors(errors), m_State(state)
 {
 }
 
-void ErrorUserInterfaceState::OnInit()
+void ErrorUserInterface::OnEnter()
 {
+    UserInterface::OnEnter();
     ImGui::StyleColorsDark();
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_ViewportsEnable;
 }
 
-void ErrorUserInterfaceState::OnShutdown()
+void ErrorUserInterface::OnExit()
 {
     ImGui::GetIO().ConfigFlags &= ~(ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_ViewportsEnable);
+    UserInterface::OnExit();
 }
 
-void ErrorUserInterfaceState::OnUpdate([[maybe_unused]] float timeStep)
+void ErrorUserInterface::OnDefineUI([[maybe_unused]] float timeStep)
 {
     const ImGuiViewport *viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -86,7 +88,7 @@ void ErrorUserInterfaceState::OnUpdate([[maybe_unused]] float timeStep)
     ImGui::PopStyleVar(2);
 }
 
-void ErrorUserInterfaceState::OnKeyEvent(Key key, KeyAction action, [[maybe_unused]] Mods mods)
+void ErrorUserInterface::OnKeyEvent(Key key, KeyAction action, [[maybe_unused]] Mods mods)
 {
     if (action != KeyAction::Release)
         return;
@@ -104,21 +106,22 @@ void ErrorUserInterfaceState::OnKeyEvent(Key key, KeyAction action, [[maybe_unus
 ErrorApplicationState::ErrorApplicationState(const ApplicationStateSpec &spec)
     : m_LogicalDevice(spec.LogicalDevice), m_MainQueue(spec.Queues.at(Application::MainQueueName))
 {
-    m_ResourceManagerSpec = {
-        .ApiVersion = spec.ApiVersion,
-        .Instance = spec.Instance,
-        .PhysicalDevice = spec.PhysicalDevice,
-        .LogicalDevice = spec.LogicalDevice,
-    };
 }
 
 ErrorApplicationState::~ErrorApplicationState() {}
 
 void ErrorApplicationState::OnEnter(ApplicationState * /* previous */)
 {
-    m_ResourceAllocator = std::make_unique<ResourceAllocator>(m_ResourceManagerSpec);
-
     const auto &spec = Application::GetInstance()->GetApplicationStateSpec();
+    ResourceManagerSpec resourceManagerSpec = {
+        .ApiVersion = spec.ApiVersion,
+        .Instance = spec.Instance,
+        .PhysicalDevice = spec.PhysicalDevice,
+        .LogicalDevice = spec.LogicalDevice,
+    };
+
+    m_ResourceAllocator = std::make_unique<ResourceAllocator>(resourceManagerSpec);
+
     vk::Format format = GetSurfaceFormat(spec.SwapchainBuilder);
     if (format == vk::Format::eUndefined)
         throw std::runtime_error("No suitable swapchain format found");
@@ -144,8 +147,7 @@ void ErrorApplicationState::OnEnter(ApplicationState * /* previous */)
         .ImageFormat = vk::Format::eR8G8B8A8Unorm,
     };
 
-    m_UserInterfaceState = std::make_unique<ErrorUserInterfaceState>(m_Errors, m_State);
-    m_UserInterface = std::make_unique<UserInterface>(userInterfaceSpec, *m_UserInterfaceState);
+    m_UserInterface = std::make_unique<ErrorUserInterface>(userInterfaceSpec, m_Errors, m_State);
 
     FrameGraphBuilder builder;
     builder.AddDeviceImage(
@@ -204,7 +206,6 @@ void ErrorApplicationState::OnExit(ApplicationState * /* next */)
     m_Renderer.reset();
     m_FrameGraph.reset();
     m_UserInterface.reset();
-    m_UserInterfaceState.reset();
     m_ResourceAllocator.reset();
 }
 
@@ -253,22 +254,25 @@ void ErrorApplicationState::SetErrorState(const std::string &prevState)
     Application::GetInstance()->SetNextState(g_StateName);
 }
 
-CompilingShadersUserInterfaceState::CompilingShadersUserInterfaceState()
+CompilingShadersUserInterface::CompilingShadersUserInterface(UserInterfaceVulkanSpec spec)
+    : UserInterface(spec)
 {
 }
 
-void CompilingShadersUserInterfaceState::OnInit()
+void CompilingShadersUserInterface::OnEnter()
 {
+    UserInterface::OnEnter();
     ImGui::StyleColorsDark();
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_ViewportsEnable;
 }
 
-void CompilingShadersUserInterfaceState::OnShutdown()
+void CompilingShadersUserInterface::OnExit()
 {
     ImGui::GetIO().ConfigFlags &= ~(ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_ViewportsEnable);
+    UserInterface::OnExit();
 }
 
-void CompilingShadersUserInterfaceState::OnUpdate([[maybe_unused]] float timeStep)
+void CompilingShadersUserInterface::OnDefineUI([[maybe_unused]] float timeStep)
 {
     const ImGuiViewport *viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -293,7 +297,7 @@ void CompilingShadersUserInterfaceState::OnUpdate([[maybe_unused]] float timeSte
     ImGui::PopStyleVar(2);
 }
 
-void CompilingShadersUserInterfaceState::SetProgress(uint32_t total, uint32_t done)
+void CompilingShadersUserInterface::SetProgress(uint32_t total, uint32_t done)
 {
     m_Total = total;
     m_Done = done;
@@ -307,7 +311,7 @@ void CompilingShadersApplicationState::AddToApplication(
     SetNextState(nextState);
 }
 
-void CompilingShadersApplicationState::SetNextState(const std::string& state)
+void CompilingShadersApplicationState::SetNextState(const std::string &state)
 {
     m_NextState = state;
 }
@@ -315,21 +319,22 @@ void CompilingShadersApplicationState::SetNextState(const std::string& state)
 CompilingShadersApplicationState::CompilingShadersApplicationState(const ApplicationStateSpec &spec)
     : m_LogicalDevice(spec.LogicalDevice), m_MainQueue(spec.Queues.at(Application::MainQueueName))
 {
-    m_ResourceManagerSpec = {
-        .ApiVersion = spec.ApiVersion,
-        .Instance = spec.Instance,
-        .PhysicalDevice = spec.PhysicalDevice,
-        .LogicalDevice = spec.LogicalDevice,
-    };
 }
 
 CompilingShadersApplicationState::~CompilingShadersApplicationState() {}
 
 void CompilingShadersApplicationState::OnEnter(ApplicationState * /* previous */)
 {
-    m_ResourceAllocator = std::make_unique<ResourceAllocator>(m_ResourceManagerSpec);
-
     const auto &spec = Application::GetInstance()->GetApplicationStateSpec();
+    ResourceManagerSpec resourceManagerSpec = {
+        .ApiVersion = spec.ApiVersion,
+        .Instance = spec.Instance,
+        .PhysicalDevice = spec.PhysicalDevice,
+        .LogicalDevice = spec.LogicalDevice,
+    };
+
+    m_ResourceAllocator = std::make_unique<ResourceAllocator>(resourceManagerSpec);
+
     vk::Format format = GetSurfaceFormat(spec.SwapchainBuilder);
     if (format == vk::Format::eUndefined)
         throw std::runtime_error("No suitable swapchain format found");
@@ -357,8 +362,7 @@ void CompilingShadersApplicationState::OnEnter(ApplicationState * /* previous */
         .ImageFormat = vk::Format::eR8G8B8A8Unorm,
     };
 
-    m_UserInterfaceState = std::make_unique<CompilingShadersUserInterfaceState>();
-    m_UserInterface = std::make_unique<UserInterface>(userInterfaceSpec, *m_UserInterfaceState);
+    m_UserInterface = std::make_unique<CompilingShadersUserInterface>(userInterfaceSpec);
 
     FrameGraphBuilder builder;
     builder.AddDeviceImage(
@@ -411,6 +415,8 @@ void CompilingShadersApplicationState::OnEnter(ApplicationState * /* previous */
 
     m_Renderer = std::make_unique<Renderer>(rendererSpec);
 
+    m_UserInterface->OnEnter();
+
     m_Total = 0;
     m_Done = 0;
 
@@ -423,10 +429,10 @@ void CompilingShadersApplicationState::OnEnter(ApplicationState * /* previous */
 
 void CompilingShadersApplicationState::OnExit(ApplicationState * /* next */)
 {
+    m_UserInterface->OnExit();
     m_Renderer.reset();
     m_FrameGraph.reset();
     m_UserInterface.reset();
-    m_UserInterfaceState.reset();
     m_ResourceAllocator.reset();
 }
 
@@ -450,7 +456,7 @@ void CompilingShadersApplicationState::OnResize(const Swapchain *swapchain)
 
 void CompilingShadersApplicationState::OnUpdate([[maybe_unused]] float timeStep)
 {
-    m_UserInterfaceState->SetProgress(m_Total, m_Done);
+    m_UserInterface->SetProgress(m_Total, m_Done);
     m_UserInterface->OnUpdate(timeStep);
     m_Renderer->OnUpdate(timeStep);
 
@@ -464,7 +470,7 @@ void CompilingShadersApplicationState::OnUpdate([[maybe_unused]] float timeStep)
             ErrorApplicationState::SetErrorState(g_StateName);
         }
         else
-           Application::GetInstance()->SetNextState(m_NextState);
+            Application::GetInstance()->SetNextState(m_NextState);
     }
 }
 

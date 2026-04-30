@@ -63,19 +63,29 @@ struct Mods
     bool Shift, Control, Alt, Super, CapsLock, NumLock;
 };
 
-class UserInterfaceState
+class UserInterface
 {
 public:
-    UserInterfaceState() = default;
-    virtual ~UserInterfaceState() = default;
+    static void InitSystem();
+    static void ShutdownSystem();
 
-    UserInterfaceState(const UserInterfaceState &) = delete;
-    UserInterfaceState &operator=(const UserInterfaceState &) = delete;
+    static void EmitKeyEvent(GLFWwindow *window, int key, int scancode, int action, int mods);
+    static void EmitMouseButtonEvent(GLFWwindow *window, int button, int action, int mods);
+    static void EmitCursorMoveEvent(GLFWwindow *window, double xpos, double ypos);
 
-    virtual void OnInit() {}
-    virtual void OnShutdown() {}
+public:
+    UserInterface(UserInterfaceVulkanSpec spec);
+    virtual ~UserInterface() = default;
 
-    virtual void OnUpdate([[maybe_unused]] float timeStep) {}
+    UserInterface(const UserInterface &) = delete;
+    UserInterface &operator=(const UserInterface &) = delete;
+
+    virtual void OnEnter();
+    virtual void OnExit();
+
+    void OnUpdate(float timeStep);
+
+    virtual void OnDefineUI([[maybe_unused]] float timeStep) {}
 
     virtual void OnKeyEvent(
         [[maybe_unused]] Key key, [[maybe_unused]] KeyAction action, [[maybe_unused]] Mods mods
@@ -88,26 +98,6 @@ public:
     {
     }
     virtual void OnCursorMoveEvent([[maybe_unused]] double xpos, [[maybe_unused]] double ypos) {}
-};
-
-class UserInterface
-{
-public:
-    static void InitSystem();
-    static void ShutdownSystem();
-
-    static void EmitKeyEvent(GLFWwindow *window, int key, int scancode, int action, int mods);
-    static void EmitMouseButtonEvent(GLFWwindow *window, int button, int action, int mods);
-    static void EmitCursorMoveEvent(GLFWwindow *window, double xpos, double ypos);
-
-public:
-    UserInterface(UserInterfaceVulkanSpec spec, UserInterfaceState &state);
-    ~UserInterface();
-
-    UserInterface(const UserInterface &) = delete;
-    UserInterface &operator=(const UserInterface &) = delete;
-
-    void OnUpdate(float timeStep);
 
 public:
     void OnRenderVulkan(vk::CommandBuffer commandBuffer);
@@ -116,15 +106,7 @@ private:
     static inline UserInterface *s_Instance = nullptr;
 
 private:
-    static void SetInstance(UserInterface *instance);
-
-private:
     UserInterfaceVulkanSpec m_VulkanSpec;
-    UserInterfaceState &m_State;
-
-private:
-    void OnActivateVulkan();
-    void OnDeactivateVulkan();
 };
 
 }

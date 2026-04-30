@@ -95,14 +95,24 @@ void Application::Run(const std::string &state)
             continue;
         }
 
+        if (m_NextState == nullptr)
+            break;
+
         uint32_t tries = 5;
         while (m_CurrentState != m_NextState)
         {
             logger::debug("Transitioning from state `{}` to state `{}`", m_CurrentStateName, m_NextStateName);
-            m_CurrentStateName = m_NextStateName;
-            m_CurrentState = m_NextState;
-            m_CurrentState->OnExit(m_NextState);
-            m_NextState->OnEnter(m_CurrentState);
+            m_LogicalDevice.waitIdle();
+
+            {
+                ApplicationState *exitingState = m_CurrentState;
+                ApplicationState *enteringState = m_NextState;
+                std::string enteringName = m_NextStateName;
+                exitingState->OnExit(enteringState);
+                enteringState->OnEnter(exitingState);
+                m_CurrentStateName = std::move(enteringName);
+                m_CurrentState = enteringState;
+            }
 
             if (--tries == 0)
             {
@@ -137,6 +147,8 @@ void Application::Run(const std::string &state)
     }
 
     m_LogicalDevice.waitIdle();
+    if (m_CurrentState != nullptr)
+        m_CurrentState->OnExit(nullptr);
 }
 
 void Application::AddState(const std::string &name, std::unique_ptr<ApplicationState> state)
