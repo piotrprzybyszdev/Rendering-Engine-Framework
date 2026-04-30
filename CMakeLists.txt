@@ -11,6 +11,7 @@ project(ref LANGUAGES CXX C)
 option(REF_BUILD_DEMOS "Build REF demo programs" ON)
 
 include(${CMAKE_SOURCE_DIR}/cmake/Utils.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/ConfigureVulkan.cmake)
 
 add_configuration(TRACE DEBUG TRUE)
 add_configuration(PROFILE RELEASE FALSE)

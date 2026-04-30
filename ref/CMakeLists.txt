@@ -1,5 +1,3 @@
-include(${PROJECT_SOURCE_DIR}/cmake/ConfigureVulkan.cmake)
-
 set(HEADER_FILES Core/Core.h Core/Serialization.h Core/Window.h Core/UserInterface.h Vulkan/Features.h Vulkan/ApplicationBuilder.h Vulkan/Swapchain.h Vulkan/Application.h Vulkan/ApplicationState.h Vulkan/Renderer/ResourceManager.h Vulkan/Renderer/DescriptorSet.h Vulkan/Renderer/ShaderLibrary.h Vulkan/Renderer/PipelineLibrary.h Vulkan/Renderer/RenderPass.h Vulkan/Renderer/FrameGraph.h Vulkan/Renderer/FrameGraphBuilder.h Vulkan/Renderer/Renderer.h)
 
 set(SOURCE_FILES Core/Window.cpp Core/UserInterface.cpp Vulkan/Features.cpp Vulkan/ApplicationBuilder.cpp Vulkan/Swapchain.cpp Vulkan/Application.cpp Vulkan/ApplicationState.cpp Vulkan/Renderer/ResourceManager.cpp Vulkan/Renderer/DescriptorSet.cpp Vulkan/Renderer/ShaderLibrary.cpp Vulkan/Renderer/PipelineLibrary.cpp Vulkan/Renderer/FrameGraph.cpp Vulkan/Renderer/FrameGraphBuilder.cpp Vulkan/Renderer/Renderer.cpp)
