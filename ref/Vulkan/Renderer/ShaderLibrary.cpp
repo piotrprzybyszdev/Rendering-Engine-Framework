@@ -511,9 +511,12 @@ void ShaderLibrary::CompileShader(ShaderId id)
         shaderInfo.Entry.c_str(), options
     );
 
+    IncludeInfo includeInfo = includer->ClearIncludeInfo();
+    const auto updateTime = std::max(includeInfo.MaxUpdateTime, info.UpdateTime);
+
     if (result.GetCompilationStatus() != shaderc_compilation_status::shaderc_compilation_status_success)
     {
-        m_Shaders[id] = Shader();
+        m_Shaders[id] = { .UpdateTime = updateTime };
         m_CompilationFailures.push_back(ShaderCompilationFailure(id, result.GetErrorMessage()));
         logger::error("Shader `{}` failed compilation", shaderInfo.Path.string());
         logger::error("{}", result.GetErrorMessage());
@@ -522,13 +525,12 @@ void ShaderLibrary::CompileShader(ShaderId id)
 
     const auto spv = std::span(result);
 
-    Shader shader;
-    shader.Reflection = ReflectShader(spv, shaderInfo.Stage);
-    shader.Code.assign(spv.begin(), spv.end());
-
-    IncludeInfo includeInfo = includer->ClearIncludeInfo();
-    shader.Includes = std::move(includeInfo.IncludedFiles);
-    shader.UpdateTime = std::max(includeInfo.MaxUpdateTime, info.UpdateTime);
+    Shader shader = {
+        .Code = std::vector(spv.begin(), spv.end()),
+        .Reflection = ReflectShader(spv, shaderInfo.Stage),
+        .Includes = std::move(includeInfo.IncludedFiles),
+        .UpdateTime = updateTime,
+    };
 
     logger::info("Successfully compiled shader `{}`", shaderInfo.Path.string());
     m_Shaders[id] = std::move(shader);
