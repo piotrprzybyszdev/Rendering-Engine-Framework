@@ -254,25 +254,25 @@ void ErrorApplicationState::SetErrorState(const std::string &prevState)
     Application::GetInstance()->SetNextState(g_StateName);
 }
 
-CompilingShadersUserInterface::CompilingShadersUserInterface(UserInterfaceVulkanSpec spec)
-    : UserInterface(spec)
+LoadingUserInterface::LoadingUserInterface(UserInterfaceVulkanSpec spec, const std::string &progressText)
+    : UserInterface(spec), m_ProgressText(progressText)
 {
 }
 
-void CompilingShadersUserInterface::OnEnter()
+void LoadingUserInterface::OnEnter()
 {
     UserInterface::OnEnter();
     ImGui::StyleColorsDark();
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_ViewportsEnable;
 }
 
-void CompilingShadersUserInterface::OnExit()
+void LoadingUserInterface::OnExit()
 {
     ImGui::GetIO().ConfigFlags &= ~(ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_ViewportsEnable);
     UserInterface::OnExit();
 }
 
-void CompilingShadersUserInterface::OnDefineUI([[maybe_unused]] float timeStep)
+void LoadingUserInterface::OnDefineUI([[maybe_unused]] float timeStep)
 {
     const ImGuiViewport *viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -282,7 +282,7 @@ void CompilingShadersUserInterface::OnDefineUI([[maybe_unused]] float timeStep)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 
     ImGui::Begin(
-        "Errors", nullptr,
+        "Loading", nullptr,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
             ImGuiWindowFlags_NoBringToFrontOnFocus
     );
@@ -290,40 +290,30 @@ void CompilingShadersUserInterface::OnDefineUI([[maybe_unused]] float timeStep)
     ImGui::SetCursorPosX(viewport->WorkSize.x / 4.0f);
     ImGui::SetCursorPosY(viewport->WorkSize.y / 4.0f);
     const float progress = static_cast<float>(m_Done) / static_cast<float>(m_Total);
-    const std::string text = std::format("Compiling Shaders [{}/{}]", m_Done, m_Total);
+    const std::string text = std::format("{} [{}/{}]", m_ProgressText, m_Done, m_Total);
     ImGui::ProgressBar(progress, ImVec2(viewport->WorkSize.x / 2.0f, 0), text.c_str());
     ImGui::End();
 
     ImGui::PopStyleVar(2);
 }
 
-void CompilingShadersUserInterface::SetProgress(uint32_t total, uint32_t done)
+void LoadingUserInterface::SetProgress(uint32_t total, uint32_t done)
 {
     m_Total = total;
     m_Done = done;
 }
 
-void CompilingShadersApplicationState::AddToApplication(
-    Application &application, const std::string &nextState
+LoadingApplicationState::LoadingApplicationState(
+    const ApplicationStateSpec &spec, const std::string &state, const std::string &progressText
 )
-{
-    application.AddAndCreateState<vulkan::CompilingShadersApplicationState>(g_StateName);
-    SetNextState(nextState);
-}
-
-void CompilingShadersApplicationState::SetNextState(const std::string &state)
-{
-    m_NextState = state;
-}
-
-CompilingShadersApplicationState::CompilingShadersApplicationState(const ApplicationStateSpec &spec)
-    : m_LogicalDevice(spec.LogicalDevice), m_MainQueue(spec.Queues.at(Application::MainQueueName))
+    : m_LogicalDevice(spec.LogicalDevice), m_MainQueue(spec.Queues.at(Application::MainQueueName)),
+      m_StateName(state), m_ProgressText(progressText)
 {
 }
 
-CompilingShadersApplicationState::~CompilingShadersApplicationState() {}
+LoadingApplicationState::~LoadingApplicationState() {}
 
-void CompilingShadersApplicationState::OnEnter(ApplicationState * /* previous */)
+void LoadingApplicationState::OnEnter(ApplicationState * /* previous */)
 {
     const auto &spec = Application::GetInstance()->GetApplicationStateSpec();
     ResourceManagerSpec resourceManagerSpec = {
@@ -362,7 +352,7 @@ void CompilingShadersApplicationState::OnEnter(ApplicationState * /* previous */
         .ImageFormat = vk::Format::eR8G8B8A8Unorm,
     };
 
-    m_UserInterface = std::make_unique<CompilingShadersUserInterface>(userInterfaceSpec);
+    m_UserInterface = std::make_unique<LoadingUserInterface>(userInterfaceSpec, m_ProgressText);
 
     FrameGraphBuilder builder;
     builder.AddDeviceImage(
@@ -419,15 +409,9 @@ void CompilingShadersApplicationState::OnEnter(ApplicationState * /* previous */
 
     m_Total = 0;
     m_Done = 0;
-
-    uint32_t threadCount = std::thread::hardware_concurrency();
-    if (threadCount == 0)
-        threadCount = 1;
-
-    Application::GetInstance()->GetShaderLibrary().LoadShadersAsync(m_Total, m_Done, threadCount);
 }
 
-void CompilingShadersApplicationState::OnExit(ApplicationState * /* next */)
+void LoadingApplicationState::OnExit(ApplicationState * /* next */)
 {
     m_UserInterface->OnExit();
     m_Renderer.reset();
@@ -436,7 +420,7 @@ void CompilingShadersApplicationState::OnExit(ApplicationState * /* next */)
     m_ResourceAllocator.reset();
 }
 
-void CompilingShadersApplicationState::OnResize(const Swapchain *swapchain)
+void LoadingApplicationState::OnResize(const Swapchain *swapchain)
 {
     m_Renderer->OnResize(swapchain);
 
@@ -454,11 +438,37 @@ void CompilingShadersApplicationState::OnResize(const Swapchain *swapchain)
         swapchain->GetExtent();
 }
 
-void CompilingShadersApplicationState::OnUpdate([[maybe_unused]] float timeStep)
+void LoadingApplicationState::OnUpdate([[maybe_unused]] float timeStep)
 {
     m_UserInterface->SetProgress(m_Total, m_Done);
     m_UserInterface->OnUpdate(timeStep);
     m_Renderer->OnUpdate(timeStep);
+}
+
+void LoadingApplicationState::OnRender()
+{
+    m_Renderer->OnRender();
+}
+
+CompilingShadersApplicationState::CompilingShadersApplicationState(const ApplicationStateSpec &spec)
+    : LoadingApplicationState(spec, g_StateName, "Compiling Shaders")
+{
+}
+
+void CompilingShadersApplicationState::OnEnter(ApplicationState *previous)
+{
+    LoadingApplicationState::OnEnter(previous);
+
+    uint32_t threadCount = std::thread::hardware_concurrency();
+    if (threadCount == 0)
+        threadCount = 1;
+
+    Application::GetInstance()->GetShaderLibrary().LoadShadersAsync(m_Total, m_Done, threadCount);
+}
+
+void CompilingShadersApplicationState::OnUpdate(float timeStep)
+{
+    LoadingApplicationState::OnUpdate(timeStep);
 
     if (m_Total == m_Done)
     {
@@ -470,13 +480,21 @@ void CompilingShadersApplicationState::OnUpdate([[maybe_unused]] float timeStep)
             ErrorApplicationState::SetErrorState(g_StateName);
         }
         else
-            Application::GetInstance()->SetNextState(m_NextState);
+            Application::GetInstance()->SetNextState(s_NextState);
     }
 }
 
-void CompilingShadersApplicationState::OnRender()
+void CompilingShadersApplicationState::AddToApplication(
+    Application &application, const std::string &nextState
+)
 {
-    m_Renderer->OnRender();
+    application.AddAndCreateState<vulkan::CompilingShadersApplicationState>(g_StateName);
+    SetNextState(nextState);
+}
+
+void CompilingShadersApplicationState::SetNextState(const std::string &state)
+{
+    s_NextState = state;
 }
 
 }

@@ -39,6 +39,7 @@ public:
 
 protected:
     void SetDefaultSwapchain();
+    void SetUserInterfaceFormat(vk::Format format);
     void SetSwapchainFormat(vk::SurfaceFormatKHR format);
     void SetSwapchainUsageFlags(vk::ImageUsageFlags usageFlags);
     void SetSwapchainImageCount(uint32_t imageCount);
@@ -53,6 +54,7 @@ protected:
     std::unique_ptr<Renderer> m_Renderer;
 
     std::string m_State;
+    vk::Format m_UserInterfaceFormat = vk::Format::eR8G8B8A8Unorm;
     vk::SurfaceFormatKHR m_SwapchainFormat;
     vk::ImageUsageFlags m_SwapchainUsageFlags;
     uint32_t m_SwapchainImageCount = 2;
@@ -169,7 +171,10 @@ private:
 class SwapchainUserInterface final : public DemoUserInterface
 {
 public:
-    SwapchainUserInterface(UserInterfaceVulkanSpec spec, SwapchainBuilder *swapchainBuilder, vk::Format format, uint32_t imageCount);
+    SwapchainUserInterface(
+        UserInterfaceVulkanSpec spec, SwapchainBuilder *swapchainBuilder, vk::Format format,
+        uint32_t imageCount
+    );
     ~SwapchainUserInterface() override = default;
 
     void OnDefineUI(float timeStep) override;

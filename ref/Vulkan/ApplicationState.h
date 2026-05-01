@@ -77,6 +77,9 @@ public:
     ErrorApplicationState(const ApplicationStateSpec &spec);
     ~ErrorApplicationState() override;
 
+    ErrorApplicationState(const ErrorApplicationState &) = delete;
+    ErrorApplicationState &operator=(const ErrorApplicationState &) = delete;
+
     void OnEnter(ApplicationState *previous) override;
     void OnExit(ApplicationState *next) override;
 
@@ -91,7 +94,7 @@ public:
     static void SetErrorState(const std::string &prevState);
 
 public:
-    inline static std::string g_StateName = "REF Error State";
+    inline static const std::string g_StateName = "REF Error State";
 
 private:
     vk::Device m_LogicalDevice;
@@ -107,11 +110,11 @@ private:
     inline static std::string m_State;
 };
 
-class CompilingShadersUserInterface final : public UserInterface
+class LoadingUserInterface final : public UserInterface
 {
 public:
-    CompilingShadersUserInterface(UserInterfaceVulkanSpec spec);
-    ~CompilingShadersUserInterface() override = default;
+    LoadingUserInterface(UserInterfaceVulkanSpec spec, const std::string &progressText);
+    ~LoadingUserInterface() override = default;
 
     void OnEnter() override;
     void OnExit() override;
@@ -121,15 +124,21 @@ public:
     void SetProgress(uint32_t total, uint32_t done);
 
 private:
+    const std::string m_ProgressText;
     uint32_t m_Total;
     uint32_t m_Done;
 };
 
-class CompilingShadersApplicationState final : public ApplicationState
+class LoadingApplicationState : public ApplicationState
 {
 public:
-    CompilingShadersApplicationState(const ApplicationStateSpec &spec);
-    ~CompilingShadersApplicationState() override;
+    LoadingApplicationState(
+        const ApplicationStateSpec &spec, const std::string &state, const std::string &progressText
+    );
+    ~LoadingApplicationState() override;
+
+    LoadingApplicationState(const LoadingApplicationState &) = delete;
+    LoadingApplicationState &operator=(const LoadingApplicationState &) = delete;
 
     void OnEnter(ApplicationState *previous) override;
     void OnExit(ApplicationState *next) override;
@@ -139,19 +148,12 @@ public:
     void OnUpdate(float timeStep) override;
     void OnRender() override;
 
-public:
-    static void AddToApplication(Application &application, const std::string &nextState);
-    static void SetNextState(const std::string &state);
-
-public:
-    inline static std::string g_StateName = "REF Compiling Shaders State";
-
-private:
+protected:
     vk::Device m_LogicalDevice;
     Queue m_MainQueue;
 
     std::unique_ptr<ResourceAllocator> m_ResourceAllocator;
-    std::unique_ptr<CompilingShadersUserInterface> m_UserInterface;
+    std::unique_ptr<LoadingUserInterface> m_UserInterface;
     std::unique_ptr<FrameGraph> m_FrameGraph;
     std::unique_ptr<Renderer> m_Renderer;
 
@@ -159,8 +161,32 @@ private:
     std::atomic<uint32_t> m_Done = 0;
 
 private:
-    inline static std::vector<std::string> m_Errors;
-    inline static std::string m_NextState = "No State";
+    const std::string m_StateName = "REF Loading State";
+    const std::string m_ProgressText = "Loading";
+};
+
+class CompilingShadersApplicationState final : public LoadingApplicationState
+{
+public:
+    CompilingShadersApplicationState(const ApplicationStateSpec &spec);
+    ~CompilingShadersApplicationState() override = default;
+
+    CompilingShadersApplicationState(const CompilingShadersApplicationState &) = delete;
+    CompilingShadersApplicationState &operator=(const CompilingShadersApplicationState &) = delete;
+
+    void OnEnter(ApplicationState *previous) override;
+
+    void OnUpdate(float timeStep) override;
+
+public:
+    static void AddToApplication(Application &application, const std::string &nextState);
+    static void SetNextState(const std::string &state);
+
+public:
+    static inline const std::string g_StateName = "REF Compiling Shaders State";
+
+private:
+    static inline std::string s_NextState = "No State";
 };
 
 }

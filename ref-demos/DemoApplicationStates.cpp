@@ -106,7 +106,7 @@ void DemoApplicationState::OnEnter(ApplicationState * /* previous */)
         .QueueFamilyIndex = mainQueue.FamilyIndex,
         .Queue = mainQueue.Handle,
         .ImageCount = m_SwapchainImageCount,
-        .ImageFormat = GetUnormFormat(m_SwapchainFormat.format),
+        .ImageFormat = m_UserInterfaceFormat,
     };
 
     m_UserInterface = std::make_unique<DemoUserInterface>(userInterfaceSpec);
@@ -148,6 +148,11 @@ void DemoApplicationState::SetDefaultSwapchain()
     }
 
     SetSwapchainFormat(format);
+}
+
+void DemoApplicationState::SetUserInterfaceFormat(vk::Format format)
+{
+    m_UserInterfaceFormat = format;
 }
 
 void DemoApplicationState::SetSwapchainFormat(vk::SurfaceFormatKHR format)
