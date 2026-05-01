@@ -93,6 +93,8 @@ public:
     static std::vector<std::string> &GetErrors();
     static void SetErrorState(const std::string &prevState);
 
+    static bool ReloadShaders(const std::string &prevState);
+
 public:
     inline static const std::string g_StateName = "REF Error State";
 
@@ -106,8 +108,8 @@ private:
     std::unique_ptr<Renderer> m_Renderer;
 
 private:
-    inline static std::vector<std::string> m_Errors;
-    inline static std::string m_State;
+    inline static std::vector<std::string> s_Errors;
+    inline static std::string s_State;
 };
 
 class LoadingUserInterface final : public UserInterface
@@ -125,8 +127,8 @@ public:
 
 private:
     const std::string m_ProgressText;
-    uint32_t m_Total;
-    uint32_t m_Done;
+    uint32_t m_Total = 0;
+    uint32_t m_Done = 0;
 };
 
 class LoadingApplicationState : public ApplicationState

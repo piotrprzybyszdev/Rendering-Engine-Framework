@@ -147,7 +147,7 @@ void ErrorApplicationState::OnEnter(ApplicationState * /* previous */)
         .ImageFormat = vk::Format::eR8G8B8A8Unorm,
     };
 
-    m_UserInterface = std::make_unique<ErrorUserInterface>(userInterfaceSpec, m_Errors, m_State);
+    m_UserInterface = std::make_unique<ErrorUserInterface>(userInterfaceSpec, s_Errors, s_State);
 
     FrameGraphBuilder builder;
     builder.AddDeviceImage(
@@ -199,10 +199,14 @@ void ErrorApplicationState::OnEnter(ApplicationState * /* previous */)
     };
 
     m_Renderer = std::make_unique<Renderer>(rendererSpec);
+
+    m_UserInterface->OnEnter();
 }
 
 void ErrorApplicationState::OnExit(ApplicationState * /* next */)
 {
+    m_UserInterface->OnExit();
+
     m_Renderer.reset();
     m_FrameGraph.reset();
     m_UserInterface.reset();
@@ -245,13 +249,26 @@ void ErrorApplicationState::AddToApplication(Application &application)
 
 std::vector<std::string> &ErrorApplicationState::GetErrors()
 {
-    return m_Errors;
+    return s_Errors;
 }
 
 void ErrorApplicationState::SetErrorState(const std::string &prevState)
 {
-    m_State = prevState;
+    s_State = prevState;
     Application::GetInstance()->SetNextState(g_StateName);
+}
+
+bool ErrorApplicationState::ReloadShaders(const std::string &prevState)
+{
+    bool success = Application::GetInstance()->GetPipelineLibrary().CompilePipelines();
+    if (!success)
+    {
+        auto errors = Application::GetInstance()->GetShaderLibrary().GetCompilationErrors();
+        s_Errors = std::vector(errors.begin(), errors.end());
+        SetErrorState(prevState);
+    }
+
+    return success;
 }
 
 LoadingUserInterface::LoadingUserInterface(UserInterfaceVulkanSpec spec, const std::string &progressText)

@@ -80,14 +80,11 @@ public:
 private:
     vk::Device m_LogicalDevice;
     Queue m_MainQueue;
+    PipelineLibrary *m_PipelineLibrary;
 
-    ShaderId m_ShaderId;
     ComputePipelineInstanceId m_PipelineId;
 
     float m_Time = 0.0f;
-
-    ShaderLibrary *m_ShaderLibrary;
-    PipelineLibrary *m_PipelineLibrary;
 };
 
 class TriangleApplicationState final : public DemoApplicationState

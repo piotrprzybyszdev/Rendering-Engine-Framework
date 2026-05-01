@@ -207,14 +207,12 @@ void DemoApplicationState::SetShaderErrors()
 
 ComputeApplicationState::ComputeApplicationState(const ApplicationStateSpec &spec)
     : DemoApplicationState("Compute Demo State"), m_LogicalDevice(spec.LogicalDevice),
-      m_MainQueue(spec.Queues.at(Application::MainQueueName)), m_ShaderLibrary(spec.ShaderLibrary),
-      m_PipelineLibrary(spec.PipelineLibrary)
+      m_MainQueue(spec.Queues.at(Application::MainQueueName)), m_PipelineLibrary(spec.PipelineLibrary)
 {
-    m_ShaderId = m_ShaderLibrary->GetShaderByPath("Shaders/gradient.comp");
+    auto shaderId = spec.ShaderLibrary->GetShaderByPath("Shaders/gradient.comp");
 
     {
-        auto pipeline =
-            m_PipelineLibrary->AddPipeline(ComputePipelineInfo("Shader Toy Pipeline", m_ShaderId));
+        auto pipeline = m_PipelineLibrary->AddPipeline(ComputePipelineInfo("Shader Toy Pipeline", shaderId));
         ComputePipelineInstanceInfo pipelineInstanceInfo("Shader Toy Pipeline Instance", pipeline);
         AddSpecializationConstant(pipelineInstanceInfo, 0, 1.0f);
         m_PipelineId = m_PipelineLibrary->AddPipelineInstance(pipelineInstanceInfo);
@@ -233,16 +231,6 @@ void ComputeApplicationState::OnEnter(ApplicationState *previous)
     DemoApplicationState::OnEnter(previous);
     if (!DemoApplicationState::EnsurePipelinesCompiled({ m_PipelineId }))
         return;
-
-    m_Time = 0.0f;
-    bool success = m_PipelineLibrary->CompilePipelineInstance(m_PipelineId);
-    if (!success)
-    {
-        auto errors = Application::GetInstance()->GetShaderLibrary().GetCompilationErrors();
-        ErrorApplicationState::GetErrors() = std::vector(errors.begin(), errors.end());
-        ErrorApplicationState::SetErrorState("Compute Demo State");
-        return;
-    }
 
     FrameGraphBuilder builder;
 
@@ -316,14 +304,7 @@ void ComputeApplicationState::OnUpdate(float timeStep)
     if (m_Time > 5.0f)
     {
         m_Time -= 5.0f;
-        bool success = m_PipelineLibrary->CompilePipelineInstance(m_PipelineId);
-        if (!success)
-        {
-            auto errors = Application::GetInstance()->GetShaderLibrary().GetCompilationErrors();
-            ErrorApplicationState::GetErrors() = std::vector(errors.begin(), errors.end());
-            ErrorApplicationState::SetErrorState("Compute Demo State");
-            return;
-        }
+        ErrorApplicationState::ReloadShaders("Compute Demo State");
     }
 }
 

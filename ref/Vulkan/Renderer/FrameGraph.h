@@ -249,10 +249,7 @@ public:
     );
     CustomGraphicsPassDynamicConfig GetCustomGraphicsPassDynamicConfig(const std::string &name);
 
-    void SetFrame(FrameInfo info);
-
-    void OnUpdate(float timeStep);
-    void OnRender(vk::CommandBuffer commandBuffer);
+    void OnRender(vk::CommandBuffer commandBuffer, const FrameInfo &frameInfo);
 
 private:
     PipelineLibrary *m_PipelineLibrary;
@@ -302,6 +299,7 @@ private:
 
     template<typename P>
     void UpdateDescriptors(P &pass, const PassExecution &execution, bool isFrameCountChanged);
+    void UpdateFrameResources();
 
     template<typename P> void SetupPass(P &pass, PassExecution &execution);
     template<typename P> void ExecutePass(const P &pass, vk::CommandBuffer commandBuffer);

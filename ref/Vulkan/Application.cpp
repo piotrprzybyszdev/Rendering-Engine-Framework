@@ -137,12 +137,12 @@ void Application::Run(const std::string &state)
             continue;
         }
 
-        m_Swapchain->AcquireImage(m_LogicalDevice);
-
         m_CurrentState->OnUpdate(timeStep);
+        if (m_CurrentState != m_NextState)
+            continue;
 
+        m_Swapchain->AcquireImage(m_LogicalDevice);
         m_CurrentState->OnRender();
-
         m_Swapchain->Present(m_MainQueue.Handle);
     }
 
