@@ -298,7 +298,6 @@ void ComputeApplicationState::OnUpdate(float timeStep)
     m_FrameGraph->UpdateImage(FrameGraph::g_SwapchainImageResourceName);
 
     m_UserInterface->OnUpdate(timeStep);
-    m_Renderer->OnUpdate(timeStep);
     m_Time += timeStep / 1000.0f;
 
     if (m_Time > 5.0f)
@@ -310,7 +309,8 @@ void ComputeApplicationState::OnUpdate(float timeStep)
 
 void ComputeApplicationState::OnRender()
 {
-    m_Renderer->OnRender();
+    m_Renderer->BeginFrame();
+    m_Renderer->EndFrame();
 }
 
 TriangleApplicationState::TriangleApplicationState(const ApplicationStateSpec &spec)
@@ -477,12 +477,12 @@ void TriangleApplicationState::OnResize(const Swapchain *swapchain)
 void TriangleApplicationState::OnUpdate(float timeStep)
 {
     m_UserInterface->OnUpdate(timeStep);
-    m_Renderer->OnUpdate(timeStep);
 }
 
 void TriangleApplicationState::OnRender()
 {
-    m_Renderer->OnRender();
+    m_Renderer->BeginFrame();
+    m_Renderer->EndFrame();
 }
 
 ParticleApplicationState::ParticleApplicationState(const ApplicationStateSpec &spec)
@@ -726,12 +726,12 @@ void ParticleApplicationState::OnUpdate(float timeStep)
     }
 
     m_UserInterface->OnUpdate(timeStep);
-    m_Renderer->OnUpdate(timeStep);
 }
 
 void ParticleApplicationState::OnRender()
 {
-    m_Renderer->OnRender();
+    m_Renderer->BeginFrame();
+    m_Renderer->EndFrame();
 }
 
 CubeApplicationState::CubeApplicationState(const ApplicationStateSpec &spec)
@@ -1174,7 +1174,6 @@ void CubeApplicationState::OnResize(const Swapchain *swapchain)
 void CubeApplicationState::OnUpdate(float timeStep)
 {
     m_UserInterface->OnUpdate(timeStep);
-    m_Renderer->OnUpdate(timeStep);
 
     m_CubeAngle += timeStep * 0.002f;
     m_Matrices.ModelTransform[0][0] = std::cos(m_CubeAngle);
@@ -1187,7 +1186,11 @@ void CubeApplicationState::OnUpdate(float timeStep)
     m_ReflectionMatrices.ModelTransform[1][1] = 2.0f;
     m_ReflectionMatrices.ModelTransform[2][0] = -std::sin(-3.14f + 0.7f + m_CubeAngle);
     m_ReflectionMatrices.ModelTransform[2][2] = 2.0f * std::cos(-3.14f + 0.7f + m_CubeAngle);
+}
 
+void CubeApplicationState::OnRender()
+{
+    m_Renderer->BeginFrame();
     {
         auto m = std::span(&m_Matrices, 1);
         m_ResourceAllocator->UploadToBuffer(
@@ -1208,11 +1211,7 @@ void CubeApplicationState::OnUpdate(float timeStep)
             m_FrameGraph->GetCurrentBuffer("Reflection Buffer"), m.data(), m.size_bytes()
         );
     }
-}
-
-void CubeApplicationState::OnRender()
-{
-    m_Renderer->OnRender();
+    m_Renderer->EndFrame();
 }
 
 SwapchainUserInterface::SwapchainUserInterface(
@@ -1467,12 +1466,12 @@ void SwapchainApplicationState::OnResize(const Swapchain *swapchain)
 void SwapchainApplicationState::OnUpdate(float timeStep)
 {
     m_UserInterface->OnUpdate(timeStep);
-    m_Renderer->OnUpdate(timeStep);
 }
 
 void SwapchainApplicationState::OnRender()
 {
-    m_Renderer->OnRender();
+    m_Renderer->BeginFrame();
+    m_Renderer->EndFrame();
 }
 
 }

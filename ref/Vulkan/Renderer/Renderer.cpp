@@ -136,11 +136,7 @@ void Renderer::OnResize(const Swapchain *swapchain)
     m_CurrentFrameGraph->UpdateImage(FrameGraph::g_SwapchainImageResourceName);
 }
 
-void Renderer::OnUpdate([[maybe_unused]] float timeStep)
-{
-}
-
-void Renderer::OnRender()
+void Renderer::BeginFrame()
 {
     FrameGraph::FrameInfo frameInfo = {
         .FrameInFlightIndex = m_Swapchain->GetCurrentFrameInFlightIndex(),
@@ -149,9 +145,13 @@ void Renderer::OnRender()
         .ImageView = m_Swapchain->GetCurrentFrame().ImageView,
         .Extent = m_Swapchain->GetExtent(),
     };
+    m_CurrentFrameGraph->SetFrame(frameInfo);
+}
 
+void Renderer::EndFrame()
+{
     const auto &resources = m_RenderingResources.at(m_Swapchain->GetCurrentFrameInFlightIndex());
-    m_CurrentFrameGraph->OnRender(resources.CommandBuffer, frameInfo);
+    m_CurrentFrameGraph->OnRender(resources.CommandBuffer);
 
     const auto &sync = m_Swapchain->GetCurrentSynchronizationObjects();
 

@@ -46,8 +46,8 @@ public:
 
     void OnResize(const Swapchain *swapchain);
 
-    void OnUpdate(float timeStep);
-    void OnRender();
+    void BeginFrame();
+    void EndFrame();
 
 private:
     vk::Device m_LogicalDevice;

@@ -171,8 +171,10 @@ CustomGraphicsPassDynamicConfig FrameGraph::GetCustomGraphicsPassDynamicConfig(c
     return CustomGraphicsPassDynamicConfig(m_CustomGraphicsPasses.at(name).Spec);
 }
 
-void FrameGraph::UpdateFrameResources()
+void FrameGraph::SetFrame(const FrameInfo &frameInfo)
 {
+    m_FrameInfo = frameInfo;
+
     bool isFrameCountChanged = false;
 
     while (m_RenderingResourcesCount < m_FrameInfo.FrameInFlightCount)
@@ -403,11 +405,8 @@ template<typename P> void FrameGraph::ExecutePass(const P &pass, vk::CommandBuff
     }
 }
 
-void FrameGraph::OnRender(vk::CommandBuffer commandBuffer, const FrameInfo &frameInfo)
+void FrameGraph::OnRender(vk::CommandBuffer commandBuffer)
 {
-    m_FrameInfo = frameInfo;
-    UpdateFrameResources();
-
     [[maybe_unused]] auto getColor = [](PassType type) {
         auto fromHex = [](uint32_t hex) -> std::array<float, 4> {
             float r = ((hex >> 16) & 0xff) / 255.0f;

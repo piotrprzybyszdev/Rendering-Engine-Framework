@@ -234,12 +234,12 @@ void ErrorApplicationState::OnResize(const Swapchain *swapchain)
 void ErrorApplicationState::OnUpdate(float timeStep)
 {
     m_UserInterface->OnUpdate(timeStep);
-    m_Renderer->OnUpdate(timeStep);
 }
 
 void ErrorApplicationState::OnRender()
 {
-    m_Renderer->OnRender();
+    m_Renderer->BeginFrame();
+    m_Renderer->EndFrame();
 }
 
 void ErrorApplicationState::AddToApplication(Application &application)
@@ -459,12 +459,12 @@ void LoadingApplicationState::OnUpdate([[maybe_unused]] float timeStep)
 {
     m_UserInterface->SetProgress(m_Total, m_Done);
     m_UserInterface->OnUpdate(timeStep);
-    m_Renderer->OnUpdate(timeStep);
 }
 
 void LoadingApplicationState::OnRender()
 {
-    m_Renderer->OnRender();
+    m_Renderer->BeginFrame();
+    m_Renderer->EndFrame();
 }
 
 CompilingShadersApplicationState::CompilingShadersApplicationState(const ApplicationStateSpec &spec)
