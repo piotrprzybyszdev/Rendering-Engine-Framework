@@ -6,7 +6,6 @@
 
 #include <Vulkan/Renderer/Renderer.h>
 #include <Vulkan/Renderer/ResourceManager.h>
-#include <Vulkan/Renderer/ShaderLibrary.h>
 
 #include <set>
 #include <string>
@@ -31,7 +30,7 @@ private:
 class DemoApplicationState : public ApplicationState
 {
 public:
-    DemoApplicationState(const std::string &state);
+    DemoApplicationState(const std::string &state, bool withUI = true);
     ~DemoApplicationState() override = default;
 
     void OnEnter(ApplicationState *previous) override;
@@ -53,7 +52,8 @@ protected:
     std::unique_ptr<FrameGraph> m_FrameGraph;
     std::unique_ptr<Renderer> m_Renderer;
 
-    std::string m_State;
+    const std::string m_State;
+    const bool m_WithUI;
     vk::Format m_UserInterfaceFormat = vk::Format::eR8G8B8A8Unorm;
     vk::SurfaceFormatKHR m_SwapchainFormat;
     vk::ImageUsageFlags m_SwapchainUsageFlags;
@@ -186,7 +186,7 @@ private:
     uint32_t m_ImageCount = 2;
 };
 
-class SwapchainApplicationState final : public ApplicationState
+class SwapchainApplicationState final : public DemoApplicationState
 {
 public:
     SwapchainApplicationState(const ApplicationStateSpec &spec);
@@ -206,9 +206,6 @@ private:
     PipelineLibrary *m_PipelineLibrary;
 
     std::unique_ptr<SwapchainUserInterface> m_UserInterface;
-    std::unique_ptr<FrameGraph> m_FrameGraph;
-    std::unique_ptr<Renderer> m_Renderer;
-    std::unique_ptr<ResourceAllocator> m_ResourceAllocator;
 
     SwapchainBuilder *m_SwapchainBuilder;
 };

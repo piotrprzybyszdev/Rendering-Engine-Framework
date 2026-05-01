@@ -78,7 +78,8 @@ uint32_t GetImageCount(SwapchainBuilder* swapchainBuilder, uint32_t imageCount)
 
 }
 
-DemoApplicationState::DemoApplicationState(const std::string &state) : m_State(state)
+DemoApplicationState::DemoApplicationState(const std::string &state, bool withUI)
+    : m_State(state), m_WithUI(withUI)
 {
     DemoUserInterface::AddState(m_State);
 }
@@ -96,23 +97,24 @@ void DemoApplicationState::OnEnter(ApplicationState * /* previous */)
 
     m_ResourceAllocator = std::make_unique<ResourceAllocator>(resourceManagerSpec);
 
-    const Queue &mainQueue = spec.Queues.at(Application::MainQueueName);
-    UserInterfaceVulkanSpec userInterfaceSpec = {
-        .Window = spec.ApplicationWindow->GetHandle(),
-        .ApiVersion = spec.ApiVersion,
-        .Instance = spec.Instance,
-        .PhysicalDevice = spec.PhysicalDevice,
-        .LogicalDevice = spec.LogicalDevice,
-        .QueueFamilyIndex = mainQueue.FamilyIndex,
-        .Queue = mainQueue.Handle,
-        .ImageCount = m_SwapchainImageCount,
-        .ImageFormat = m_UserInterfaceFormat,
-    };
+    if (m_WithUI)
+    {
+        const Queue &mainQueue = spec.Queues.at(Application::MainQueueName);
+        UserInterfaceVulkanSpec userInterfaceSpec = {
+            .Window = spec.ApplicationWindow->GetHandle(),
+            .ApiVersion = spec.ApiVersion,
+            .Instance = spec.Instance,
+            .PhysicalDevice = spec.PhysicalDevice,
+            .LogicalDevice = spec.LogicalDevice,
+            .QueueFamilyIndex = mainQueue.FamilyIndex,
+            .Queue = mainQueue.Handle,
+            .ImageCount = m_SwapchainImageCount,
+            .ImageFormat = m_UserInterfaceFormat,
+        };
 
-    m_UserInterface = std::make_unique<DemoUserInterface>(userInterfaceSpec);
-
-
-    m_UserInterface->OnEnter();
+        m_UserInterface = std::make_unique<DemoUserInterface>(userInterfaceSpec);
+        m_UserInterface->OnEnter();
+    }
 
     spec.SwapchainBuilder->SetSurfaceFormat(m_SwapchainFormat);
     spec.SwapchainBuilder->SetUsageFlags(m_SwapchainUsageFlags);
@@ -122,7 +124,8 @@ void DemoApplicationState::OnEnter(ApplicationState * /* previous */)
 
 void DemoApplicationState::OnExit(ApplicationState * /* next */)
 {
-    m_UserInterface->OnExit();
+    if (m_WithUI)
+        m_UserInterface->OnExit();
 
     m_Renderer.reset();
     m_FrameGraph.reset();
@@ -1293,42 +1296,18 @@ uint32_t SwapchainUserInterface::GetImageCount() const
 }
 
 SwapchainApplicationState::SwapchainApplicationState(const ApplicationStateSpec &spec)
-    : m_LogicalDevice(spec.LogicalDevice), m_MainQueue(spec.Queues.at(Application::MainQueueName)),
-      m_PipelineLibrary(spec.PipelineLibrary), m_SwapchainBuilder(spec.SwapchainBuilder)
+    : DemoApplicationState("Swapchain Demo State", false), m_LogicalDevice(spec.LogicalDevice),
+      m_MainQueue(spec.Queues.at(Application::MainQueueName)), m_PipelineLibrary(spec.PipelineLibrary),
+      m_SwapchainBuilder(spec.SwapchainBuilder)
 {
-    DemoUserInterface::AddState("Swapchain Demo State");
 }
 
 SwapchainApplicationState::~SwapchainApplicationState() {}
 
-void SwapchainApplicationState::OnEnter(ApplicationState * /* previous */)
+void SwapchainApplicationState::OnEnter(ApplicationState *previous)
 {
-    m_SwapchainBuilder->SetUsageFlags(
-        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst
-    );
-    m_SwapchainBuilder->SetPresentMode(vk::PresentModeKHR::eFifo);
-    m_SwapchainBuilder->SetImageCount(GetImageCount(m_SwapchainBuilder, 2u));
-    vk::Format format = GetSurfaceFormat(m_SwapchainBuilder);
-    if (format == vk::Format::eUndefined)
-    {
-        auto &errors = ErrorApplicationState::GetErrors();
-        errors.clear();
-        errors.push_back("Could not find any suitable swapchain formats");
-        ErrorApplicationState::SetErrorState("Swapchain Demo State");
-        return;
-    }
-    m_SwapchainBuilder->SetSurfaceFormat(format);
-    Application::GetInstance()->SetRecreateSwapchain();
-
-    const auto &spec = Application::GetInstance()->GetApplicationStateSpec();
-    ResourceManagerSpec resourceManagerSpec = {
-        .ApiVersion = spec.ApiVersion,
-        .Instance = spec.Instance,
-        .PhysicalDevice = spec.PhysicalDevice,
-        .LogicalDevice = spec.LogicalDevice,
-    };
-
-    m_ResourceAllocator = std::make_unique<ResourceAllocator>(resourceManagerSpec);
+    SetDefaultSwapchain();
+    DemoApplicationState::OnEnter(previous);
 
     FrameGraphBuilder builder;
 
@@ -1383,6 +1362,7 @@ void SwapchainApplicationState::OnEnter(ApplicationState * /* previous */)
     m_Renderer = std::make_unique<Renderer>(rendererSpec);
 
     {
+        const auto &spec = Application::GetInstance()->GetApplicationStateSpec();
         const uint32_t imageCount =
             std::clamp(2u, m_SwapchainBuilder->GetMinImageCount(), m_SwapchainBuilder->GetMaxImageCount());
 
@@ -1401,19 +1381,14 @@ void SwapchainApplicationState::OnEnter(ApplicationState * /* previous */)
         m_UserInterface = std::make_unique<SwapchainUserInterface>(
             userInterfaceSpec, spec.SwapchainBuilder, vk::Format::eR8G8B8A8Unorm, imageCount
         );
+        m_UserInterface->OnEnter();
     }
-
-    m_UserInterface->OnEnter();
 }
 
-void SwapchainApplicationState::OnExit(ApplicationState * /* next */)
+void SwapchainApplicationState::OnExit(ApplicationState *next)
 {
     m_UserInterface->OnExit();
-
-    m_Renderer.reset();
-    m_FrameGraph.reset();
-    m_UserInterface.reset();
-    m_ResourceAllocator.reset();
+    DemoApplicationState::OnExit(next);
 }
 
 void SwapchainApplicationState::OnResize(const Swapchain *swapchain)
