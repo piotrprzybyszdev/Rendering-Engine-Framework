@@ -44,6 +44,12 @@ public:
         vk::ImageSubresourceLayers layers
     );
 
+    void ClearImage(
+        ImageResourceId image, vk::ImageLayout layout, vk::ClearColorValue value,
+        vk::ImageSubresourceRange range
+    );
+    void FillBuffer(BufferResourceId buffer, vk::DeviceSize offset, vk::DeviceSize size, uint32_t value);
+
     void OnResize(const Swapchain *swapchain);
 
     void BeginFrame();

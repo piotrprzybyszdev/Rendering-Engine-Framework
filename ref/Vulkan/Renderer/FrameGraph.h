@@ -13,12 +13,19 @@
 namespace ref::vulkan
 {
 
+enum class ResourceType
+{
+    Transient,   // Synchronized only within the frame (eg. attachments)
+    Temporal,    // Synchronized within the frame and between frames (eg. accumulation buffers/images)
+    Persistent,  // Not synchronized, must only be read (eg. material textures, uniform buffers)
+};
+
 struct Buffer
 {
     vk::BufferCreateInfo Info;
     bool IsDevice;
     bool IsBuffered;
-    bool IsPersistent;
+    ResourceType Type;
     std::vector<BufferResourceId> Resources;
 
     BufferResourceId GetResourceId(uint32_t frameInFlight);
@@ -30,7 +37,7 @@ struct Image
     vk::ImageViewCreateInfo ViewInfo;
     bool IsDevice;
     bool IsBuffered;
-    bool IsPersistent;
+    ResourceType Type;
     std::vector<std::pair<ImageResourceId, ImageViewResourceId>> Resources;
 
     std::pair<ImageResourceId, ImageViewResourceId> GetResourceId(uint32_t frameInFlight);
@@ -202,7 +209,11 @@ struct FrameGraphSpec
     std::map<std::string, CustomGraphicsPassInfo> CustomGraphicsPasses;
 
     std::vector<PassExecution> PassExecutions;
-    std::vector<vk::ImageMemoryBarrier2> PresentImageBarriers;
+
+    std::vector<std::string> BottomOfPipeBufferNames;
+    std::vector<vk::BufferMemoryBarrier2> BottomOfPipeBufferBarriers;
+    std::vector<std::string> BottomOfPipeImageNames;
+    std::vector<vk::ImageMemoryBarrier2> BottomOfPipeImageBarriers;
 };
 
 class FrameGraph
@@ -269,7 +280,11 @@ private:
     std::map<std::string, CustomGraphicsPass> m_CustomGraphicsPasses;
 
     std::vector<PassExecution> m_PassExecutions;
-    std::vector<vk::ImageMemoryBarrier2> m_PresentImageBarriers;
+
+    std::vector<std::string> m_BottomOfPipeBufferNames;
+    std::vector<vk::BufferMemoryBarrier2> m_BottomOfPipeBufferBarriers;
+    std::vector<std::string> m_BottomOfPipeImageNames;
+    std::vector<vk::ImageMemoryBarrier2> m_BottomOfPipeImageBarriers;
 
     FrameInfo m_FrameInfo;
 

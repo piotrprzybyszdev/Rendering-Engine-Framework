@@ -5,7 +5,6 @@
 #include "FrameGraph.h"
 #include "RenderPass.h"
 #include "ResourceManager.h"
-#include "ShaderLibrary.h"
 
 namespace ref::vulkan
 {
@@ -17,21 +16,20 @@ public:
     FrameGraphBuilder(const FrameGraphBuilder &) = delete;
     FrameGraphBuilder &operator=(const FrameGraphBuilder &) = delete;
 
-    void AddHostBuffer(std::string name, vk::BufferCreateInfo info, bool buffered, bool persistent);
-    void AddDeviceBuffer(std::string name, vk::BufferCreateInfo info, bool buffered, bool persistent);
+    void AddHostBuffer(std::string name, vk::BufferCreateInfo info, ResourceType type, bool buffered);
+    void AddDeviceBuffer(std::string name, vk::BufferCreateInfo info, ResourceType type, bool buffered);
 
     void AddHostImage(
-        std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, bool buffered,
-        bool persistent
-
+        std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, ResourceType type,
+        bool buffered
     );
     void AddDeviceImage(
-        std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, bool buffered,
-        bool persistent
+        std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, ResourceType type,
+        bool buffered
     );
 
-    void AddHostImage(std::string name, vk::ImageCreateInfo info, bool buffered, bool persistent);
-    void AddDeviceImage(std::string name, vk::ImageCreateInfo info, bool buffered, bool persistent);
+    void AddHostImage(std::string name, vk::ImageCreateInfo info, ResourceType type, bool buffered);
+    void AddDeviceImage(std::string name, vk::ImageCreateInfo info, ResourceType type, bool buffered);
 
     void AddClearPass(std::string name, ClearPassSpec spec);
     void AddBlitPass(std::string name, BlitPassSpec spec);

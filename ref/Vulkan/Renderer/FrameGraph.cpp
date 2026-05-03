@@ -15,7 +15,10 @@ FrameGraph::FrameGraph(
     : m_PipelineLibrary(pipelineLibrary), m_ResourceAllocator(resourceAllocator),
       m_BufferResources(std::move(spec.Buffers)), m_ImageResources(std::move(spec.Images)),
       m_PassExecutions(std::move(spec.PassExecutions)),
-      m_PresentImageBarriers(std::move(spec.PresentImageBarriers))
+      m_BottomOfPipeBufferNames(std::move(spec.BottomOfPipeBufferNames)),
+      m_BottomOfPipeBufferBarriers(std::move(spec.BottomOfPipeBufferBarriers)),
+      m_BottomOfPipeImageNames(std::move(spec.BottomOfPipeImageNames)),
+      m_BottomOfPipeImageBarriers(std::move(spec.BottomOfPipeImageBarriers))
 {
     for (auto &[name, buffer] : m_BufferResources)
     {
@@ -476,11 +479,14 @@ void FrameGraph::OnRender(vk::CommandBuffer commandBuffer)
 #endif
     }
 
-    for (auto &&barrier : m_PresentImageBarriers)
-        barrier.image = GetImageHandle(g_SwapchainImageResourceName);
+    for (auto &&[name, barrier] : std::views::zip(m_BottomOfPipeBufferNames, m_BottomOfPipeBufferBarriers))
+        barrier.setBuffer(GetBufferResource(name).first);
+    for (auto &&[name, barrier] : std::views::zip(m_BottomOfPipeImageNames, m_BottomOfPipeImageBarriers))
+        barrier.setImage(GetImageHandle(name));
 
     vk::DependencyInfo dependency;
-    dependency.setImageMemoryBarriers(m_PresentImageBarriers);
+    dependency.setBufferMemoryBarriers(m_BottomOfPipeBufferBarriers);
+    dependency.setImageMemoryBarriers(m_BottomOfPipeImageBarriers);
     commandBuffer.pipelineBarrier2(dependency);
 
     commandBuffer.end();

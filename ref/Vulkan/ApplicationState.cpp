@@ -160,7 +160,7 @@ void ErrorApplicationState::OnEnter(ApplicationState * /* previous */)
                 vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst |
                 vk::ImageUsageFlagBits::eColorAttachment
             ),
-        true, false
+        ResourceType::Transient, true
     );
 
     {
@@ -382,7 +382,7 @@ void LoadingApplicationState::OnEnter(ApplicationState * /* previous */)
                 vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst |
                 vk::ImageUsageFlagBits::eColorAttachment
             ),
-        true, false
+        ResourceType::Transient, true
     );
 
     {

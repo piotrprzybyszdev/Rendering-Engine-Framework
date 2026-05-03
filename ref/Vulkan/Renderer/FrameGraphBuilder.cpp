@@ -8,45 +8,45 @@ namespace ref::vulkan
 {
 
 void FrameGraphBuilder::AddHostBuffer(
-    std::string name, vk::BufferCreateInfo info, bool buffered, bool persistent
+    std::string name, vk::BufferCreateInfo info, ResourceType type, bool buffered
 )
 {
     if (m_Spec.Buffers.contains(name))
         logger::warn("Buffer `{}` already exists and will be overridden", name);
 
-    m_Spec.Buffers[name] = Buffer(info, false, buffered, persistent, {});
+    m_Spec.Buffers[name] = Buffer(info, false, buffered, type, {});
 }
 
 void FrameGraphBuilder::AddDeviceBuffer(
-    std::string name, vk::BufferCreateInfo info, bool buffered, bool persistent
+    std::string name, vk::BufferCreateInfo info, ResourceType type, bool buffered
 )
 {
     if (m_Spec.Buffers.contains(name))
         logger::warn("Buffer `{}` already exists and will be overridden", name);
 
-    m_Spec.Buffers[name] = Buffer(info, true, buffered, persistent, {});
+    m_Spec.Buffers[name] = Buffer(info, true, buffered, type, {});
 }
 
 void FrameGraphBuilder::AddHostImage(
-    std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, bool buffered,
-    bool persistent
+    std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, ResourceType type,
+    bool buffered
 )
 {
     if (m_Spec.Images.contains(name))
         logger::warn("Image `{}` already exists and will be overridden", name);
 
-    m_Spec.Images[name] = Image(info, viewInfo, false, buffered, persistent, {});
+    m_Spec.Images[name] = Image(info, viewInfo, false, buffered, type, {});
 }
 
 void FrameGraphBuilder::AddDeviceImage(
-    std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, bool buffered,
-    bool persistent
+    std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, ResourceType type,
+    bool buffered
 )
 {
     if (m_Spec.Images.contains(name))
         logger::warn("Image `{}` already exists and will be overridden", name);
 
-    m_Spec.Images[name] = Image(info, viewInfo, true, buffered, persistent, {});
+    m_Spec.Images[name] = Image(info, viewInfo, true, buffered, type, {});
 }
 
 namespace
@@ -99,23 +99,23 @@ vk::ImageViewCreateInfo ToImageViewCreateInfo(const vk::ImageCreateInfo &info)
 }
 
 void FrameGraphBuilder::AddHostImage(
-    std::string name, vk::ImageCreateInfo info, bool buffered, bool persistent
+    std::string name, vk::ImageCreateInfo info, ResourceType type, bool buffered
 )
 {
     if (m_Spec.Images.contains(name))
         logger::warn("Image `{}` already exists and will be overridden", name);
 
-    m_Spec.Images[name] = Image(info, ToImageViewCreateInfo(info), false, buffered, persistent, {});
+    m_Spec.Images[name] = Image(info, ToImageViewCreateInfo(info), false, buffered, type, {});
 }
 
 void FrameGraphBuilder::AddDeviceImage(
-    std::string name, vk::ImageCreateInfo info, bool buffered, bool persistent
+    std::string name, vk::ImageCreateInfo info, ResourceType type, bool buffered
 )
 {
     if (m_Spec.Images.contains(name))
         logger::warn("Image `{}` already exists and will be overridden", name);
 
-    m_Spec.Images[name] = Image(info, ToImageViewCreateInfo(info), true, buffered, persistent, {});
+    m_Spec.Images[name] = Image(info, ToImageViewCreateInfo(info), true, buffered, type, {});
 }
 
 void WarnImageBindings(std::span<const ImageBinding> bindings)
@@ -256,6 +256,8 @@ struct FrameGraphAccesses
     std::map<std::string, BufferAccess> BufferResources;
     std::map<std::string, std::vector<ImageAccess>> ImageResources;
 
+    std::map<std::string, vk::ImageLayout> InitialImageLayouts;
+
     vk::ImageSubresourceRange GetRange(const std::string &image)
     {
         if (image == FrameGraph::g_SwapchainImageResourceName)
@@ -281,7 +283,7 @@ struct FrameGraphAccesses
     // TODO: batch barriers if both are reads
     void AddBufferBarrier(const std::string &name, BufferAccess dstAccess, PassExecution &execution)
     {
-        if (Buffers.at(name).IsPersistent)
+        if (Buffers.at(name).Type == ResourceType::Persistent)
             return;
 
         BufferAccess srcAccess = BufferResources[name];
@@ -301,8 +303,20 @@ struct FrameGraphAccesses
     // TODO: batch barriers if both are reads
     void AddImageBarrier(const std::string &name, ImageAccess dstAccess, PassExecution &execution)
     {
-        if (name != FrameGraph::g_SwapchainImageResourceName && Images.at(name).IsPersistent)
-            return;
+        if (name != FrameGraph::g_SwapchainImageResourceName)
+        {
+            if (Images.at(name).Type == ResourceType::Persistent)
+                return;
+
+            if (Images.at(name).Type == ResourceType::Temporal)
+            {
+                // for the first barrier assume that the image is already in the correct layout
+                InitialImageLayouts.emplace(name, dstAccess.Layout);
+                auto &accesses = ImageResources.at(name);
+                assert(accesses.size() == 1);
+                accesses.front().Layout = dstAccess.Layout;
+            }
+        }
 
         auto getMaxLayer = [](const vk::ImageSubresourceRange &range) {
             return range.baseArrayLayer + range.layerCount - 1;
@@ -882,7 +896,7 @@ std::unique_ptr<FrameGraph> FrameGraphBuilder::CreateUnique(
     PipelineLibrary *pipelineLibrary, ResourceAllocator *resourceAllocator
 )
 {
-    FrameGraphAccesses accesses(m_Spec.Buffers, m_Spec.Images);
+    FrameGraphAccesses frameGraphAccess(m_Spec.Buffers, m_Spec.Images);
 
     for (const auto &execution : m_Spec.PassExecutions)
     {
@@ -904,10 +918,48 @@ std::unique_ptr<FrameGraph> FrameGraphBuilder::CreateUnique(
             accesses->SynchronizePass(pass, execution, pipelineLibrary);
         };
 
-        Dispatch(execution, synchronizePass, &accesses, execution, pipelineLibrary);
+        Dispatch(execution, synchronizePass, &frameGraphAccess, execution, pipelineLibrary);
     }
 
-    for (const auto &srcAccess : accesses.ImageResources.at(FrameGraph::g_SwapchainImageResourceName))
+    for (const auto &[name, srcAccess] : frameGraphAccess.BufferResources)
+    {
+        if (m_Spec.Buffers.at(name).Type != ResourceType::Temporal)
+            continue;
+
+        vk::BufferMemoryBarrier2 barrier(
+            srcAccess.Stage, srcAccess.Access, vk::PipelineStageFlagBits2::eBottomOfPipe,
+            vk::AccessFlagBits2::eNone, vk::QueueFamilyIgnored,
+            vk::QueueFamilyIgnored, nullptr, srcAccess.Offset, srcAccess.Size
+        );
+
+        m_Spec.BottomOfPipeBufferNames.push_back(name);
+        m_Spec.BottomOfPipeBufferBarriers.push_back(barrier);
+        logger::trace("Inserting Temporal Barrier: {}", ToString(barrier));
+    }
+
+    for (const auto &[name, accesses] : frameGraphAccess.ImageResources)
+    {
+        if (name == FrameGraph::g_SwapchainImageResourceName ||
+            m_Spec.Images.at(name).Type != ResourceType::Temporal)
+            continue;
+
+        for (const auto& srcAccess : accesses)
+        {
+            vk::ImageLayout dstLayout = frameGraphAccess.InitialImageLayouts.at(name);
+
+            vk::ImageMemoryBarrier2 barrier(
+                srcAccess.Stage, srcAccess.Access, vk::PipelineStageFlagBits2::eBottomOfPipe,
+                vk::AccessFlagBits2::eNone, srcAccess.Layout, dstLayout,
+                vk::QueueFamilyIgnored, vk::QueueFamilyIgnored, nullptr, srcAccess.Range
+            );
+
+            m_Spec.BottomOfPipeImageNames.push_back(name);
+            m_Spec.BottomOfPipeImageBarriers.push_back(barrier);
+            logger::trace("Inserting Temporal Barrier: {}", ToString(barrier));
+        }
+    }
+
+    for (const auto &srcAccess : frameGraphAccess.ImageResources.at(FrameGraph::g_SwapchainImageResourceName))
     {
         vk::ImageMemoryBarrier2 barrier(
             srcAccess.Stage, srcAccess.Access, vk::PipelineStageFlagBits2::eBottomOfPipe,
@@ -915,7 +967,8 @@ std::unique_ptr<FrameGraph> FrameGraphBuilder::CreateUnique(
             vk::QueueFamilyIgnored, vk::QueueFamilyIgnored, nullptr, srcAccess.Range
         );
 
-        m_Spec.PresentImageBarriers.push_back(barrier);
+        m_Spec.BottomOfPipeImageNames.push_back(FrameGraph::g_SwapchainImageResourceName);
+        m_Spec.BottomOfPipeImageBarriers.push_back(barrier);
         logger::trace("Inserting Present Barrier: {}", ToString(barrier));
     }
 

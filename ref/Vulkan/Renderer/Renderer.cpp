@@ -111,6 +111,91 @@ void Renderer::UploadWithStaging(
     m_LogicalDevice.resetFences({ m_Fence });
 }
 
+void Renderer::ClearImage(
+    ImageResourceId image, vk::ImageLayout layout, vk::ClearColorValue value, vk::ImageSubresourceRange range
+)
+{
+    vk::CommandBufferBeginInfo beginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+    m_CommandBuffer.reset();
+    m_CommandBuffer.begin(beginInfo);
+
+    ImageResource dstImage = m_ResourceAllocator->GetImageResource(image);
+
+    vk::ImageMemoryBarrier2 srcImageBarrier(
+        vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone, vk::PipelineStageFlagBits2::eClear,
+        vk::AccessFlagBits2::eTransferWrite, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal
+    );
+    srcImageBarrier.setSubresourceRange(range);
+    srcImageBarrier.setImage(dstImage.Handle);
+
+    m_CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(srcImageBarrier));
+
+    m_CommandBuffer.clearColorImage(dstImage.Handle, vk::ImageLayout::eTransferDstOptimal, value, range);
+
+    vk::ImageMemoryBarrier2 dstImageBarrier(
+        vk::PipelineStageFlagBits2::eClear, vk::AccessFlagBits2::eTransferWrite,
+        vk::PipelineStageFlagBits2::eBottomOfPipe, vk::AccessFlagBits2::eNone,
+        vk::ImageLayout::eTransferDstOptimal, layout
+    );
+    dstImageBarrier.setSubresourceRange(range);
+    dstImageBarrier.setImage(dstImage.Handle);
+
+    m_CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setImageMemoryBarriers(dstImageBarrier));
+
+    m_CommandBuffer.end();
+
+    vk::CommandBufferSubmitInfo cmdInfo(m_CommandBuffer);
+    m_MainQueue.Handle.submit2(vk::SubmitInfo2().setCommandBufferInfos(cmdInfo), m_Fence);
+
+    [[maybe_unused]] vk::Result result =
+        m_LogicalDevice.waitForFences({ m_Fence }, vk::True, std::numeric_limits<uint64_t>::max());
+    assert(result == vk::Result::eSuccess);
+    m_LogicalDevice.resetFences({ m_Fence });
+}
+
+void Renderer::FillBuffer(BufferResourceId buffer, vk::DeviceSize offset, vk::DeviceSize size, uint32_t value)
+{
+    vk::CommandBufferBeginInfo beginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+    m_CommandBuffer.reset();
+    m_CommandBuffer.begin(beginInfo);
+
+    BufferResource dstBuffer = m_ResourceAllocator->GetBufferResource(buffer);
+
+    vk::BufferMemoryBarrier2 srcBufferBarrier(
+        vk::PipelineStageFlagBits2::eTopOfPipe, vk::AccessFlagBits2::eNone,
+        vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite
+    );
+
+    srcBufferBarrier.setOffset(offset);
+    srcBufferBarrier.setSize(size);
+    srcBufferBarrier.setBuffer(dstBuffer.Handle);
+
+    m_CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setBufferMemoryBarriers(srcBufferBarrier));
+
+    m_CommandBuffer.fillBuffer(dstBuffer.Handle, offset, size, value);
+
+    vk::BufferMemoryBarrier2 dstBufferBarrier(
+        vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite,
+        vk::PipelineStageFlagBits2::eBottomOfPipe, vk::AccessFlagBits2::eNone
+    );
+
+    dstBufferBarrier.setOffset(offset);
+    dstBufferBarrier.setSize(size);
+    dstBufferBarrier.setBuffer(dstBuffer.Handle);
+
+    m_CommandBuffer.pipelineBarrier2(vk::DependencyInfo().setBufferMemoryBarriers(dstBufferBarrier));
+
+    m_CommandBuffer.end();
+
+    vk::CommandBufferSubmitInfo cmdInfo(m_CommandBuffer);
+    m_MainQueue.Handle.submit2(vk::SubmitInfo2().setCommandBufferInfos(cmdInfo), m_Fence);
+
+    [[maybe_unused]] vk::Result result =
+        m_LogicalDevice.waitForFences({ m_Fence }, vk::True, std::numeric_limits<uint64_t>::max());
+    assert(result == vk::Result::eSuccess);
+    m_LogicalDevice.resetFences({ m_Fence });
+}
+
 void Renderer::OnResize(const Swapchain *swapchain)
 {
     m_Swapchain = swapchain;
