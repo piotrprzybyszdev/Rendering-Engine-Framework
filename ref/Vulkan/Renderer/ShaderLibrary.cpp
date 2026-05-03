@@ -652,7 +652,8 @@ ReflectionData ShaderLibrary::ReflectShader(std::span<const uint32_t> spirv, vk:
             size = std::max(size, static_cast<uint32_t>(range.offset + range.range) - offset);
         }
 
-        reflection.PushConstantRanges = { { stage, offset, size } };
+        if (size > 0)
+            reflection.PushConstantRanges = { { stage, offset, size } };
     }
 
     auto specializationConstants = compiler.get_specialization_constants();

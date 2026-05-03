@@ -19,7 +19,10 @@ int main()
 
     {
         vulkan::Application application = builder.CreateApplication("REF");
-        application.GetShaderLibrary().SetShaderCachePath("ShaderCache");
+
+        const std::filesystem::path cache = "RefCache";
+        application.GetShaderLibrary().SetShaderCachePath(cache / "Shaders");
+        application.GetPipelineLibrary().SetPipelineCachePath(cache);
         application.GetShaderLibrary().AddShadersFromDirectory("Shaders");
 
         vulkan::ErrorApplicationState::AddToApplication(application);

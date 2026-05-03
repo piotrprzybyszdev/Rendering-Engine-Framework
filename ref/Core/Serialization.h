@@ -1,4 +1,7 @@
-#include <fstream>
+#include <bit>
+#include <istream>
+#include <span>
+#include <vector>
 
 namespace ref::serialization
 {

@@ -54,6 +54,7 @@ Application::Application(ApplicationSpec &&spec)
 Application::~Application()
 {
     m_ShaderLibrary->WriteShaderCaches();
+    m_PipelineLibrary->WritePipelineCache();
     s_Instance = nullptr;
 }
 

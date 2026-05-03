@@ -111,6 +111,8 @@ public:
     PipelineLibrary(const PipelineLibrary &) = delete;
     PipelineLibrary &operator=(const PipelineLibrary &) = delete;
 
+    void SetPipelineCachePath(const std::filesystem::path &path);
+
     ComputePipelineId AddPipeline(ComputePipelineInfo pipelineInfo);
     GraphicsPipelineId AddPipeline(GraphicsPipelineInfo pipelineInfo);
 
@@ -122,6 +124,8 @@ public:
 
     bool CompilePipelines();
 
+    void WritePipelineCache();
+
     const Pipeline &GetPipeline(ComputePipelineInstanceId id) const;
     const Pipeline &GetPipeline(GraphicsPipelineInstanceId id) const;
     const PipelineInstance &GetPipelineInstance(ComputePipelineInstanceId id) const;
@@ -132,6 +136,8 @@ public:
 private:
     vk::Device m_LogicalDevice;
     ShaderLibrary *m_ShaderLibrary;
+    std::filesystem::path m_PipelineCachePath;
+    vk::PipelineCache m_PipelineCache;
 
     std::vector<ComputePipelineInstanceInfo> m_ComputePipelineInstanceInfos;
     std::vector<GraphicsPipelineInstanceInfo> m_GraphicsPipelineInstanceInfos;
@@ -144,6 +150,8 @@ private:
 
 private:
     bool LoadPipeline(Pipeline &pipeline);
+
+    std::filesystem::path GetCachePath() const;
 };
 
 }

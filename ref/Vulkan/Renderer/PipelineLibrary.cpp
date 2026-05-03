@@ -1,6 +1,8 @@
 #include <array>
+#include <fstream>
 
 #include "Core/Core.h"
+#include "Core/Serialization.h"
 
 #include "Vulkan/Application.h"
 
@@ -9,19 +11,110 @@
 namespace ref::vulkan
 {
 
+namespace
+{
+
+struct PipelineCacheHeader
+{
+    static inline constexpr uint32_t g_Magic = serialization::MakeMagic("rpch");
+    static inline constexpr uint32_t g_Version = serialization::MakeVersion(0u, 0u, 1u, 0u);
+    static inline constexpr uint64_t g_ItemAlignment = 16;
+
+    uint32_t Magic;
+    uint32_t Version;
+    struct BinaryInfo
+    {
+        uint32_t Offset;
+        uint32_t Size;
+    } Binary;
+};
+
+void SerializePipelineCache(const std::filesystem::path &path, std::span<const std::byte> binary)
+{
+    logger::trace("Writing pipeline cache {}", path.string());
+
+    uint64_t offset = 0;
+    serialization::AddOffset<PipelineCacheHeader>(offset, PipelineCacheHeader::g_ItemAlignment);
+
+    PipelineCacheHeader header = {
+        .Magic = PipelineCacheHeader::g_Magic,
+        .Version = PipelineCacheHeader::g_Version,
+        .Binary = {
+            .Offset = static_cast<uint32_t>(offset),
+            .Size = static_cast<uint32_t>(binary.size_bytes()),
+        },
+    };
+
+    std::ofstream file(path, std::ios::binary | std::ios::out);
+    assert(file.is_open());
+
+    serialization::Serialize(file, PipelineCacheHeader::g_ItemAlignment, header);
+    assert(file.tellp() == header.Binary.Offset);
+    serialization::Serialize(file, PipelineCacheHeader::g_ItemAlignment, binary);
+
+    logger::info("Successfully written pipeline cache {}", path.string());
+}
+
+std::vector<std::byte> DeserializePipelineCache(const std::filesystem::path &path)
+{
+    logger::trace("Reading pipeline cache {}", path.string());
+
+    std::ifstream file(path, std::ios::binary | std::ios::in);
+    assert(file.is_open());
+
+    PipelineCacheHeader header = {};
+    serialization::Deserialize(file, PipelineCacheHeader::g_ItemAlignment, header);
+    assert(header.Magic == PipelineCacheHeader::g_Magic);
+    assert(header.Version == PipelineCacheHeader::g_Version);
+
+    std::vector<std::byte> binary;
+    assert(header.Binary.Offset == file.tellg());
+    serialization::Deserialize(file, PipelineCacheHeader::g_ItemAlignment, header.Binary.Size, binary);
+
+    file.ignore();
+    assert(file.eof());
+
+    logger::info("Successfully read pipeline cache {}", path.string());
+    return binary;
+}
+
+}
+
 PipelineLibrary::PipelineLibrary(vk::Device logicalDevice, ShaderLibrary *shaderLibrary)
     : m_LogicalDevice(logicalDevice), m_ShaderLibrary(shaderLibrary)
 {
+    const std::filesystem::path path = GetCachePath();
+    if (!std::filesystem::exists(path))
+    {
+        logger::debug("Pipeline cache was not found");
+        m_PipelineCache = m_LogicalDevice.createPipelineCache(vk::PipelineCacheCreateInfo());
+        return;
+    }
+
+    const std::vector<std::byte> cache = DeserializePipelineCache(path);
+
+    vk::PipelineCacheCreateInfo info;
+    info.setPInitialData(cache.data());
+    info.setInitialDataSize(cache.size());
+    m_PipelineCache = m_LogicalDevice.createPipelineCache(info);
+}
+
+void PipelineLibrary::SetPipelineCachePath(const std::filesystem::path &path)
+{
+    m_PipelineCachePath = path;
 }
 
 ComputePipelineId PipelineLibrary::AddPipeline(ComputePipelineInfo pipelineInfo)
 {
+    assert(pipelineInfo.ComputeShader.IsValid());
     m_ComputePipelines.push_back(Pipeline(std::move(pipelineInfo.Name), { pipelineInfo.ComputeShader }));
     return ComputePipelineId(m_ComputePipelines.size() - 1);
 }
 
 GraphicsPipelineId PipelineLibrary::AddPipeline(GraphicsPipelineInfo pipelineInfo)
 {
+    assert(pipelineInfo.VertexShaderId.IsValid());
+    assert(pipelineInfo.FragmentShaderId.IsValid());
     m_GraphicsPipelines.push_back(Pipeline(
         std::move(pipelineInfo.Name),
         { pipelineInfo.VertexShaderId, pipelineInfo.GeometryShaderId, pipelineInfo.FragmentShaderId }
@@ -51,6 +144,12 @@ bool PipelineLibrary::CompilePipelines()
     for (size_t id = 0; id < m_GraphicsPipelineInstances.size(); id++)
         success &= CompilePipelineInstance(GraphicsPipelineInstanceId(id));
     return success;
+}
+
+void PipelineLibrary::WritePipelineCache()
+{
+    std::vector<uint8_t> data = m_LogicalDevice.getPipelineCacheData(m_PipelineCache);
+    SerializePipelineCache(GetCachePath(), std::as_bytes(std::span(data)));
 }
 
 bool PipelineLibrary::LoadPipeline(Pipeline& pipeline)
@@ -125,6 +224,11 @@ bool PipelineLibrary::LoadPipeline(Pipeline& pipeline)
     Application::GetInstance()->SetDebugName(pipeline.Layout, pipeline.Name.c_str());
 
     return true;
+}
+
+std::filesystem::path PipelineLibrary::GetCachePath() const
+{
+    return m_PipelineCachePath / "pipelines.rpc";
 }
 
 const Pipeline &PipelineLibrary::GetPipeline(ComputePipelineInstanceId id) const
@@ -235,7 +339,7 @@ bool PipelineLibrary::CompilePipelineInstance(ComputePipelineInstanceId id)
     computePipelineInfo.setStage(stageInfo);
     computePipelineInfo.setLayout(pipeline.Layout);
 
-    auto result = m_LogicalDevice.createComputePipeline(nullptr, computePipelineInfo);
+    auto result = m_LogicalDevice.createComputePipeline(m_PipelineCache, computePipelineInfo);
     if (!result.has_value())
     {
         logger::error("Compute pipeline instance `{}` compilation failed", pipelineInstanceInfo.Name);
@@ -370,7 +474,7 @@ bool PipelineLibrary::CompilePipelineInstance(GraphicsPipelineInstanceId id)
     graphicsPipelineInfo.setLayout(pipeline.Layout);
     graphicsPipelineInfo.setPNext(renderingInfo);
 
-    auto result = m_LogicalDevice.createGraphicsPipeline(nullptr, graphicsPipelineInfo);
+    auto result = m_LogicalDevice.createGraphicsPipeline(m_PipelineCache, graphicsPipelineInfo);
     if (!result.has_value())
     {
         logger::error("Graphics pipeline instance `{}` compilation failed", pipelineInstanceInfo.Name);
