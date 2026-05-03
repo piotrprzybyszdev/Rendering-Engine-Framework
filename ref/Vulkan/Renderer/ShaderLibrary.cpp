@@ -40,6 +40,21 @@ shaderc_shader_kind ToShaderKind(vk::ShaderStageFlagBits stage)
     }
 }
 
+shaderc_optimization_level ToOptimizationLevel(OptimizationMode mode)
+{
+    switch (mode)
+    {
+    case OptimizationMode::None:
+        return shaderc_optimization_level::shaderc_optimization_level_zero;
+    case OptimizationMode::Size:
+        return shaderc_optimization_level::shaderc_optimization_level_size;
+    case OptimizationMode::Performance:
+        return shaderc_optimization_level::shaderc_optimization_level_performance;
+    default:
+        std::terminate();
+    }
+}
+
 vk::Format ToFormat(uint32_t components, spirv_cross::SPIRType::BaseType type)
 {
     using Type = spirv_cross::SPIRType::BaseType;
@@ -68,7 +83,7 @@ struct FileInfo
 {
     std::filesystem::file_time_type UpdateTime;
     std::string Path;
-    size_t ContentSize;
+    size_t ContentSize = 0;
     std::unique_ptr<char[]> Content;
 };
 
@@ -101,6 +116,8 @@ struct IncludeInfo
 class Includer : public shaderc::CompileOptions::IncluderInterface
 {
 public:
+    Includer(const CompilationOptions &compilationOptions);
+
     shaderc_include_result *GetInclude(
         const char *requested_source, shaderc_include_type type, const char *requesting_source,
         size_t include_depth
@@ -111,8 +128,7 @@ public:
     IncludeInfo ClearIncludeInfo();
 
 private:
-    const uint32_t m_MaxIncludeDepth = 5;
-    std::set<std::filesystem::path> m_SystemIncludePaths;
+    CompilationOptions m_CompilationOptions;
     IncludeInfo m_IncludeInfo;
 
 private:
@@ -121,15 +137,19 @@ private:
     );
 };
 
+Includer::Includer(const CompilationOptions &compilationOptions) : m_CompilationOptions(compilationOptions) {}
+
 shaderc_include_result *Includer::GetInclude(
     const char *requested_source, shaderc_include_type type, const char *requesting_source,
     size_t include_depth
 )
 {
-    if (include_depth > m_MaxIncludeDepth)
+    if (include_depth > m_CompilationOptions.MaxIncludeDepth)
     {
         FileInfo *fileInfo = new FileInfo();
-        fileInfo->Path = std::format("MaxIncludeDepth exceeded {}/{}", include_depth, m_MaxIncludeDepth);
+        fileInfo->Path = std::format(
+            "MaxIncludeDepth exceeded {}/{}", include_depth, m_CompilationOptions.MaxIncludeDepth
+        );
         logger::warn(fileInfo->Path);
         return new shaderc_include_result {
             "", 0, fileInfo->Path.c_str(), fileInfo->Path.size(), fileInfo,
@@ -200,7 +220,7 @@ std::optional<std::filesystem::path> Includer::GetFilePath(
     }
     case shaderc_include_type_standard:
     {
-        for (const std::filesystem::path &path : m_SystemIncludePaths)
+        for (const std::filesystem::path &path : m_CompilationOptions.IncludeDirectories)
         {
             std::filesystem::path absolutePath = path / requested;
             if (std::filesystem::is_regular_file(absolutePath))
@@ -342,6 +362,11 @@ Shader DeserializeShader(const std::filesystem::path &path)
 ShaderLibrary::ShaderLibrary(vk::Device logicalDevice, uint32_t apiVersion)
     : m_LogicalDevice(logicalDevice), m_ApiVersion(apiVersion)
 {
+}
+
+CompilationOptions &ShaderLibrary::ModifyCompilationOptions()
+{
+    return m_CompilationOptions;
 }
 
 void ShaderLibrary::SetShaderCachePath(const std::filesystem::path &path)
@@ -511,7 +536,15 @@ void ShaderLibrary::CompileShader(ShaderId id)
     shaderc::Compiler compiler;
     shaderc::CompileOptions options;
     options.SetTargetEnvironment(shaderc_target_env::shaderc_target_env_vulkan, m_ApiVersion);
-    Includer *includer = new Includer();
+    for (const auto &name : m_CompilationOptions.MacroDefinitions)
+        options.AddMacroDefinition(name);
+    for (const auto &[name, value] : m_CompilationOptions.ValueMacroDefinitions)
+        options.AddMacroDefinition(name, value);
+    options.SetOptimizationLevel(ToOptimizationLevel(m_CompilationOptions.Optimization));
+    if (m_CompilationOptions.GenerateDebugInfo)
+        options.SetGenerateDebugInfo();
+
+    Includer *includer = new Includer(m_CompilationOptions);
     options.SetIncluder(std::unique_ptr<Includer>(includer));
 
     const std::string path = shaderInfo.Path.string();

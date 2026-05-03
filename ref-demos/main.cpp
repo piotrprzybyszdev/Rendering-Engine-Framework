@@ -8,6 +8,28 @@
 
 using namespace ref;
 
+void ConfigureShaders(ref::vulkan::Application& application)
+{
+    std::filesystem::path cache = "RefCache";
+    auto &options = application.GetShaderLibrary().ModifyCompilationOptions();
+
+#ifdef NDEBUG
+    cache /= "Release";
+    options.Optimization = ref::vulkan::OptimizationMode::Performance;
+    options.GenerateDebugInfo = false;
+    options.MacroDefinitions.push_back("REF_SHADER_RELEASE");
+#else
+    cache /= "Debug";
+    options.Optimization = ref::vulkan::OptimizationMode::None;
+    options.GenerateDebugInfo = true;
+    options.MacroDefinitions.push_back("REF_SHADER_DEBUG");
+#endif
+
+    application.GetShaderLibrary().SetShaderCachePath(cache / "Shaders");
+    application.GetPipelineLibrary().SetPipelineCachePath(cache);
+    application.GetShaderLibrary().AddShadersFromDirectory("Shaders");
+}
+
 int main()
 {
     logger::set_level(logger::level::debug);
@@ -19,11 +41,7 @@ int main()
 
     {
         vulkan::Application application = builder.CreateApplication("REF");
-
-        const std::filesystem::path cache = "RefCache";
-        application.GetShaderLibrary().SetShaderCachePath(cache / "Shaders");
-        application.GetPipelineLibrary().SetPipelineCachePath(cache);
-        application.GetShaderLibrary().AddShadersFromDirectory("Shaders");
+        ConfigureShaders(application);
 
         vulkan::ErrorApplicationState::AddToApplication(application);
         vulkan::CompilingShadersApplicationState::AddToApplication(application, "Swapchain Demo State");

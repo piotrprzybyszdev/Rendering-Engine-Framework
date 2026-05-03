@@ -56,6 +56,23 @@ struct Shader
 
 using ShaderId = IdType<size_t, Shader>;
 
+enum class OptimizationMode
+{
+    None,
+    Size,
+    Performance,
+};
+
+struct CompilationOptions
+{
+    std::vector<std::string> MacroDefinitions = { "REF_SHADER" };
+    std::vector<std::pair<std::string, std::string>> ValueMacroDefinitions;
+    std::vector<std::filesystem::path> IncludeDirectories;
+    uint32_t MaxIncludeDepth = 5;
+    OptimizationMode Optimization = OptimizationMode::Performance;
+    bool GenerateDebugInfo = true;
+};
+
 class ShaderLibrary
 {
 public:
@@ -63,6 +80,8 @@ public:
 
     ShaderLibrary(const ShaderLibrary &) = delete;
     ShaderLibrary &operator=(const ShaderLibrary &) = delete;
+
+    CompilationOptions &ModifyCompilationOptions();
 
     void SetShaderCachePath(const std::filesystem::path &path);
     void PruneShaderCache();
@@ -87,6 +106,8 @@ private:
     vk::Device m_LogicalDevice;
     const uint32_t m_ApiVersion;
     std::filesystem::path m_ShaderCachePath;
+
+    CompilationOptions m_CompilationOptions;
 
     std::vector<ShaderInfo> m_ShaderInfos;
     std::vector<Shader> m_Shaders;
