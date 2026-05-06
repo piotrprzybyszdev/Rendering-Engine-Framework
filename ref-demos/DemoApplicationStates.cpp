@@ -241,7 +241,7 @@ void ComputeApplicationState::OnEnter(ApplicationState *previous)
         ComputePassSpec passSpec = {
             .Pipeline = m_PipelineId,
             .ImageBindings = {
-                { FrameGraph::g_SwapchainImageResourceName, 0, nullptr, false, true },
+                { FrameGraph::g_SwapchainImageViewResourceName, 0, nullptr, false, true },
             },
             .Dispatches = {
                 {
@@ -257,7 +257,7 @@ void ComputeApplicationState::OnEnter(ApplicationState *previous)
             .OnRender = [this](vk::CommandBuffer cmd){ m_UserInterface->OnRenderVulkan(cmd); },
             .ColorAttachments = {
                 {
-                    .ImageResource = FrameGraph::g_SwapchainImageResourceName,
+                    .ImageViewResource = FrameGraph::g_SwapchainImageViewResourceName,
                     .LoadOp = vk::AttachmentLoadOp::eLoad,
                 },
             },
@@ -299,6 +299,7 @@ void ComputeApplicationState::OnResize(const Swapchain *swapchain)
 void ComputeApplicationState::OnUpdate(float timeStep)
 {
     m_FrameGraph->UpdateImage(FrameGraph::g_SwapchainImageResourceName);
+    m_FrameGraph->UpdateImageView(FrameGraph::g_SwapchainImageViewResourceName);
 
     m_UserInterface->OnUpdate(timeStep);
     m_Time += timeStep / 1000.0f;
@@ -384,7 +385,7 @@ void TriangleApplicationState::OnEnter(ApplicationState *previous)
         vk::BufferCreateInfo()
             .setSize(std::span(vertices).size_bytes())
             .setUsage(vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer),
-        false, true
+        ResourceType::Persistent, false
     );
 
     builder.AddDeviceBuffer(
@@ -392,7 +393,7 @@ void TriangleApplicationState::OnEnter(ApplicationState *previous)
         vk::BufferCreateInfo()
             .setSize(std::span(indices).size_bytes())
             .setUsage(vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer),
-        false, true
+        ResourceType::Persistent, false
     );
 
     {
@@ -403,7 +404,7 @@ void TriangleApplicationState::OnEnter(ApplicationState *previous)
             },
             .ColorAttachments = {
                 {
-                    .ImageResource = FrameGraph::g_SwapchainImageResourceName,
+                    .ImageViewResource = FrameGraph::g_SwapchainImageViewResourceName,
                     .LoadOp = vk::AttachmentLoadOp::eClear,
                     .ClearValue = vk::ClearColorValue(0.0f, 0.0f, 1.0f, 1.0f),
                 },
@@ -427,7 +428,7 @@ void TriangleApplicationState::OnEnter(ApplicationState *previous)
             .OnRender = [this](vk::CommandBuffer cmd){ m_UserInterface->OnRenderVulkan(cmd); },
             .ColorAttachments = {
                 {
-                    .ImageResource = FrameGraph::g_SwapchainImageResourceName,
+                    .ImageViewResource = FrameGraph::g_SwapchainImageViewResourceName,
                     .LoadOp = vk::AttachmentLoadOp::eLoad,
                 },
             },
@@ -573,24 +574,24 @@ void ParticleApplicationState::OnEnter(ApplicationState * previous)
         vk::BufferCreateInfo()
             .setSize(std::span(vertices).size_bytes())
             .setUsage(vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer),
-        false, true
+        ResourceType::Persistent, false
     );
     builder.AddDeviceBuffer(
         "Index Buffer",
         vk::BufferCreateInfo()
             .setSize(std::span(indices).size_bytes())
             .setUsage(vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer),
-        false, true
+        ResourceType::Persistent, false
     );
     builder.AddDeviceBuffer(
         "Indirect Buffer",
         vk::BufferCreateInfo()
             .setSize(sizeof(vk::DrawIndexedIndirectCommand))
             .setUsage(vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eStorageBuffer),
-        true, false
+        ResourceType::Transient, true
     );
 
-    builder.AddDeviceImage(
+    builder.AddDeviceImageWithView(
         "Image",
         vk::ImageCreateInfo(
             vk::ImageCreateFlags(), vk::ImageType::e2D, vk::Format::eR8G8B8A8Unorm,
@@ -600,7 +601,7 @@ void ParticleApplicationState::OnEnter(ApplicationState * previous)
                 vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst |
                 vk::ImageUsageFlagBits::eColorAttachment
             ),
-        true, false
+        ResourceType::Transient, true
     );
 
     {
@@ -630,7 +631,7 @@ void ParticleApplicationState::OnEnter(ApplicationState * previous)
                 .VertexBuffers = { { "Vertex Buffer" } },
             },            
             .IndexBuffer = { "Index Buffer", 0, vk::IndexType::eUint32 },
-            .ColorAttachments = { { "Image" } },
+            .ColorAttachments = { { "Image View" } },
             .IndirectBufferResource = "Indirect Buffer",
             .Draws = { {
                 .Command = {
@@ -657,7 +658,7 @@ void ParticleApplicationState::OnEnter(ApplicationState * previous)
             .OnRender = [this](vk::CommandBuffer cmd){ m_UserInterface->OnRenderVulkan(cmd); },
             .ColorAttachments = {
                 {
-                    .ImageResource = FrameGraph::g_SwapchainImageResourceName,
+                    .ImageViewResource = FrameGraph::g_SwapchainImageViewResourceName,
                     .LoadOp = vk::AttachmentLoadOp::eLoad,
                 },
             },
@@ -700,6 +701,7 @@ void ParticleApplicationState::OnResize(const Swapchain *swapchain)
 
     m_FrameGraph->ModifyImage("Image").Info.setExtent(vk::Extent3D(extent, 1));
     m_FrameGraph->UpdateImage("Image");
+    m_FrameGraph->UpdateImageView("Image View");
 
     std::array<vk::Offset3D, 2> offsets = { vk::Offset3D(), vk::Offset3D(extent.width, extent.height, 1) };
 
@@ -901,7 +903,7 @@ void CubeApplicationState::OnEnter(ApplicationState *previous)
     m_ReflectionMatrices = m_Matrices;
 
     FrameGraphBuilder builder;
-    builder.AddDeviceImage(
+    builder.AddDeviceImageWithView(
         "Image",
         vk::ImageCreateInfo(
             vk::ImageCreateFlags(), vk::ImageType::e2D, vk::Format::eR8G8B8A8Unorm,
@@ -912,7 +914,7 @@ void CubeApplicationState::OnEnter(ApplicationState *previous)
                 vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst |
                 vk::ImageUsageFlagBits::eColorAttachment
             ),
-        true, false
+        ResourceType::Transient, true
     );
 
     builder.AddDeviceBuffer(
@@ -920,35 +922,35 @@ void CubeApplicationState::OnEnter(ApplicationState *previous)
         vk::BufferCreateInfo()
             .setSize(std::span(vertices).size_bytes())
             .setUsage(vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer),
-        false, true
+        ResourceType::Persistent, false
     );
     builder.AddDeviceBuffer(
         "Index Buffer",
         vk::BufferCreateInfo()
             .setSize(std::span(indices).size_bytes())
             .setUsage(vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer),
-        false, true
+        ResourceType::Persistent, false
     );
     builder.AddHostBuffer(
         "Matrix Buffer",
         vk::BufferCreateInfo()
             .setSize(sizeof(MatrixBuffer))
             .setUsage(vk::BufferUsageFlagBits::eUniformBuffer),
-        true, false
+        ResourceType::Persistent, true
     );
     builder.AddHostBuffer(
         "Mirror Buffer",
         vk::BufferCreateInfo()
             .setSize(sizeof(MatrixBuffer))
             .setUsage(vk::BufferUsageFlagBits::eUniformBuffer),
-        true, false
+        ResourceType::Persistent, true
     );
     builder.AddHostBuffer(
         "Reflection Buffer",
         vk::BufferCreateInfo()
             .setSize(sizeof(MatrixBuffer))
             .setUsage(vk::BufferUsageFlagBits::eUniformBuffer),
-        true, false
+        ResourceType::Persistent, true
     );
 
     builder.AddDeviceImage(
@@ -958,6 +960,11 @@ void CubeApplicationState::OnEnter(ApplicationState *previous)
             vk::Extent3D(1280, 720, 1), 1, 1, vk::SampleCountFlagBits::e4
         )
             .setUsage(vk::ImageUsageFlagBits::eDepthStencilAttachment),
+        ResourceType::Transient, true
+    );
+
+    builder.AddImageView(
+        "Depth Stencil Image View", "Depth Stencil Image",
         vk::ImageViewCreateInfo()
             .setViewType(vk::ImageViewType::e2D)
             .setFormat(vk::Format::eD24UnormS8Uint)
@@ -965,8 +972,7 @@ void CubeApplicationState::OnEnter(ApplicationState *previous)
                 vk::ImageSubresourceRange(
                     vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil, 0, 1, 0, 1
                 )
-            ),
-        true, false
+            )
     );
 
     {
@@ -981,13 +987,13 @@ void CubeApplicationState::OnEnter(ApplicationState *previous)
             .IndexBuffer = { "Index Buffer", 0, vk::IndexType::eUint32 },
             .ColorAttachments = {
                 {
-                    .ImageResource = "Image",
+                    .ImageViewResource = "Image View",
                     .LoadOp = vk::AttachmentLoadOp::eClear,
                     .ClearValue = vk::ClearColorValue(0.2f, 0.2f, 0.2f, 1.0f),
                 },
             },
             .DepthAttachment = { {
-                .ImageResource = "Depth Stencil Image",
+                .ImageViewResource = "Depth Stencil Image View",
                 .LoadOp = vk::AttachmentLoadOp::eClear,
                 .ClearValue = vk::ClearDepthStencilValue(1.0f),
             } },
@@ -1016,16 +1022,16 @@ void CubeApplicationState::OnEnter(ApplicationState *previous)
             .IndexBuffer = { "Index Buffer", 0, vk::IndexType::eUint32 },
             .ColorAttachments = {
                 {
-                    .ImageResource = "Image",
+                    .ImageViewResource = "Image View",
                     .LoadOp = vk::AttachmentLoadOp::eLoad,
                 },
             },
             .DepthAttachment = { {
-                .ImageResource = "Depth Stencil Image",
+                .ImageViewResource = "Depth Stencil Image View",
                 .LoadOp = vk::AttachmentLoadOp::eLoad,
             } },
             .StencilAttachment = { {
-                .ImageResource = "Depth Stencil Image",
+                .ImageViewResource = "Depth Stencil Image View",
                 .LoadOp = vk::AttachmentLoadOp::eClear,
                 .ClearValue = vk::ClearDepthStencilValue(1.0f, 0),
             } },
@@ -1054,19 +1060,19 @@ void CubeApplicationState::OnEnter(ApplicationState *previous)
             .IndexBuffer = { "Index Buffer", 0, vk::IndexType::eUint32 },
             .ColorAttachments = {
                 {
-                    .ImageResource = "Image",
+                    .ImageViewResource = "Image View",
                     .LoadOp = vk::AttachmentLoadOp::eLoad,
-                    .ResolveImageResource = FrameGraph::g_SwapchainImageResourceName,
+                    .ResolveImageViewResource = FrameGraph::g_SwapchainImageViewResourceName,
                     .ResolveMode = vk::ResolveModeFlagBits::eAverage,
                 },
             },
             .DepthAttachment = { {
-                .ImageResource = "Depth Stencil Image",
+                .ImageViewResource = "Depth Stencil Image View",
                 .LoadOp = vk::AttachmentLoadOp::eClear,
                 .ClearValue = vk::ClearDepthStencilValue(1.0f),
             } },
             .StencilAttachment = { {
-                .ImageResource = "Depth Stencil Image",
+                .ImageViewResource = "Depth Stencil Image View",
                 .LoadOp = vk::AttachmentLoadOp::eLoad,
             } },
             .Draws = {{
@@ -1087,7 +1093,7 @@ void CubeApplicationState::OnEnter(ApplicationState *previous)
             .OnRender = [this](vk::CommandBuffer cmd){ m_UserInterface->OnRenderVulkan(cmd); },
             .ColorAttachments = {
                 {
-                    .ImageResource = FrameGraph::g_SwapchainImageResourceName,
+                    .ImageViewResource = FrameGraph::g_SwapchainImageViewResourceName,
                     .LoadOp = vk::AttachmentLoadOp::eLoad,
                 },
             },
@@ -1127,9 +1133,11 @@ void CubeApplicationState::OnResize(const Swapchain *swapchain)
 
     m_FrameGraph->ModifyImage("Depth Stencil Image").Info.setExtent(vk::Extent3D(extent, 1));
     m_FrameGraph->UpdateImage("Depth Stencil Image");
+    m_FrameGraph->UpdateImageView("Depth Stencil Image View");
 
     m_FrameGraph->ModifyImage("Image").Info.setExtent(vk::Extent3D(extent, 1));
     m_FrameGraph->UpdateImage("Image");
+    m_FrameGraph->UpdateImageView("Image View");
 
     m_FrameGraph->GetIndexedGraphicsPassDynamicConfig("Main Pass").GetScissors() = {
         vk::Rect2D(vk::Offset2D(0, 0), extent)
@@ -1311,7 +1319,7 @@ void SwapchainApplicationState::OnEnter(ApplicationState *previous)
 
     FrameGraphBuilder builder;
 
-    builder.AddDeviceImage(
+    builder.AddDeviceImageWithView(
         "Image",
         vk::ImageCreateInfo(
             vk::ImageCreateFlagBits::eMutableFormat, vk::ImageType::e2D, vk::Format::eR8G8B8A8Unorm,
@@ -1321,7 +1329,7 @@ void SwapchainApplicationState::OnEnter(ApplicationState *previous)
                 vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst |
                 vk::ImageUsageFlagBits::eColorAttachment
             ),
-        true, false
+        ResourceType::Transient, true
     );
 
     {
@@ -1329,7 +1337,7 @@ void SwapchainApplicationState::OnEnter(ApplicationState *previous)
             .OnRender = [this](vk::CommandBuffer cmd){ m_UserInterface->OnRenderVulkan(cmd); },
             .ColorAttachments = {
                 {
-                    .ImageResource = "Image",
+                    .ImageViewResource = "Image View",
                     .LoadOp = vk::AttachmentLoadOp::eClear,
                     .ClearValue = vk::ClearColorValue(0.0f, 0.0f, 1.0f, 1.0f),
                 },
@@ -1424,9 +1432,12 @@ void SwapchainApplicationState::OnResize(const Swapchain *swapchain)
     {
         auto &image = m_FrameGraph->ModifyImage("Image");
         image.Info.setFormat(format);
-        image.ViewInfo.setFormat(unormFormat);
         image.Info.setExtent(vk::Extent3D(extent, 1));
         m_FrameGraph->UpdateImage("Image");
+
+        auto &view = m_FrameGraph->ModifyImageView("Image View");
+        view.ViewInfo.setFormat(unormFormat);
+        m_FrameGraph->UpdateImageView("Image View");
     }
 
     std::array<vk::Offset3D, 2> offsets = { vk::Offset3D(), vk::Offset3D(extent.width, extent.height, 1) };

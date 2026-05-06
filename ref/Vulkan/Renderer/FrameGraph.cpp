@@ -14,7 +14,7 @@ FrameGraph::FrameGraph(
 )
     : m_PipelineLibrary(pipelineLibrary), m_ResourceAllocator(resourceAllocator),
       m_BufferResources(std::move(spec.Buffers)), m_ImageResources(std::move(spec.Images)),
-      m_PassExecutions(std::move(spec.PassExecutions)),
+      m_PassExecutions(std::move(spec.PassExecutions)), m_ImageViewResources(std::move(spec.ImageViews)),
       m_BottomOfPipeBufferNames(std::move(spec.BottomOfPipeBufferNames)),
       m_BottomOfPipeBufferBarriers(std::move(spec.BottomOfPipeBufferBarriers)),
       m_BottomOfPipeImageNames(std::move(spec.BottomOfPipeImageNames)),
@@ -34,6 +34,15 @@ FrameGraph::FrameGraph(
             continue;
 
         image.Resources.push_back(AddAndCreateImage(name, image));
+    }
+
+    for (auto& [name, imageView] : m_ImageViewResources)
+    {
+        const auto &image = m_ImageResources.at(imageView.Image);
+        if (image.IsBuffered)
+            continue;
+
+        imageView.Resources.push_back(AddAndCreateImageView(name, imageView, image.Resources.back()));
     }
 
     for (auto &[name, pass] : spec.ClearPasses)
@@ -83,9 +92,14 @@ std::span<const BufferResourceId> FrameGraph::GetBuffer(const std::string &name)
     return m_BufferResources.at(name).Resources;
 }
 
-std::span<const std::pair<ImageResourceId, ImageViewResourceId>> FrameGraph::GetImage(const std::string &name)
+std::span<const ImageResourceId> FrameGraph::GetImage(const std::string &name)
 {
     return m_ImageResources.at(name).Resources;
+}
+
+std::span<const ImageViewResourceId> FrameGraph::GetImageView(const std::string &name)
+{
+    return m_ImageViewResources.at(name).Resources;
 }
 
 Buffer &FrameGraph::ModifyBuffer(const std::string &name)
@@ -96,6 +110,11 @@ Buffer &FrameGraph::ModifyBuffer(const std::string &name)
 Image &FrameGraph::ModifyImage(const std::string &name)
 {
     return m_ImageResources.at(name);
+}
+
+ImageView& FrameGraph::ModifyImageView(const std::string& name)
+{
+    return m_ImageViewResources.at(name);
 }
 
 void FrameGraph::UpdateBuffer(const std::string &name)
@@ -112,29 +131,40 @@ void FrameGraph::UpdateImage(const std::string &name)
     {
         auto &image = m_ImageResources.at(name);
         for (auto id : image.Resources)
-        {
-            m_ResourceAllocator->AllocateResource(id.first, image.Info, image.IsDevice);
-            vk::Image handle = m_ResourceAllocator->GetImageResource(id.first).Handle;
-            image.ViewInfo.setImage(handle);
-            m_ResourceAllocator->AllocateResource(id.second, image.ViewInfo);
-        }
+            m_ResourceAllocator->AllocateResource(id, image.Info, image.IsDevice);
     }
     m_ImagesToUpdate.push_back(name);
 }
 
+void FrameGraph::UpdateImageView(const std::string &name)
+{
+    if (name != g_SwapchainImageViewResourceName)
+    {
+        auto &view = m_ImageViewResources.at(name);
+        const auto &image = m_ImageResources.at(view.Image);
+        for (auto [viewId, imageId] : std::views::zip(view.Resources, image.Resources))
+        {
+            vk::Image handle = m_ResourceAllocator->GetImageResource(imageId).Handle;
+            view.ViewInfo.setImage(handle);
+            m_ResourceAllocator->AllocateResource(viewId, view.ViewInfo);
+        }
+    }
+    m_ImageViewsToUpdate.push_back(name);
+}
+
 BufferResourceId FrameGraph::GetCurrentBuffer(const std::string &name)
 {
-    return m_BufferResources.at(name).GetResourceId(m_FrameInfo.FrameInFlightIndex);
+    return GetBufferResourceId(name, m_FrameInfo.FrameInFlightIndex);
 }
 
 ImageResourceId FrameGraph::GetCurrentImage(const std::string &name)
 {
-    return m_ImageResources.at(name).GetResourceId(m_FrameInfo.FrameInFlightIndex).first;
+    return GetImageResourceId(name, m_FrameInfo.FrameInFlightIndex);
 }
 
 ImageViewResourceId FrameGraph::GetCurrentImageView(const std::string &name)
 {
-    return m_ImageResources.at(name).GetResourceId(m_FrameInfo.FrameInFlightIndex).second;
+    return GetImageViewResourceId(name, m_FrameInfo.FrameInFlightIndex);
 }
 
 ClearPassDynamicConfig FrameGraph::GetClearPassDynamicConfig(const std::string &name)
@@ -202,11 +232,24 @@ void FrameGraph::SetFrame(const FrameInfo &frameInfo)
             ));
         }
 
+        for (auto& [name, imageView] : m_ImageViewResources)
+        {
+            const auto &image = m_ImageResources.at(imageView.Image);
+            if (!image.IsBuffered)
+                continue;
+
+            imageView.Resources.push_back(AddAndCreateImageView(
+                std::format("{} (frame in flight {})", name, m_RenderingResourcesCount), imageView,
+                image.Resources.back()
+            ));
+        }
+
         m_RenderingResourcesCount++;
         isFrameCountChanged = true;
     }
 
-    if (isFrameCountChanged == false && m_BuffersToUpdate.empty() && m_ImagesToUpdate.empty())
+    if (isFrameCountChanged == false && m_BuffersToUpdate.empty() && m_ImagesToUpdate.empty() &&
+        m_ImageViewsToUpdate.empty())
         return;
 
     auto updateDescriptors = [](auto &pass, FrameGraph *frameGraph, const PassExecution &execution,
@@ -222,6 +265,7 @@ void FrameGraph::SetFrame(const FrameInfo &frameInfo)
 
     m_BuffersToUpdate.clear();
     m_ImagesToUpdate.clear();
+    m_ImageViewsToUpdate.clear();
 }
 
 template<typename P>
@@ -262,20 +306,20 @@ void FrameGraph::UpdateDescriptors(P &pass, const PassExecution &execution, bool
     for (const auto &binding : pass.Spec.ImageBindings)
     {
         if (isFrameCountChanged == false &&
-            std::ranges::contains(m_ImagesToUpdate, binding.ImageResource) == false)
+            std::ranges::contains(m_ImageViewsToUpdate, binding.ImageViewResource) == false)
             continue;
 
         vk::ImageLayout layout =
             binding.Write ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal;
         for (uint32_t frameInFlight = 0; frameInFlight < m_RenderingResourcesCount; frameInFlight++)
         {
-            vk::ImageView view = GetImageViewHandle(binding.ImageResource, frameInFlight);
+            vk::ImageView view = GetImageViewHandle(binding.ImageViewResource, frameInFlight);
             pass.Set->UpdateImage(binding.Binding, frameInFlight, view, binding.Sampler, layout);
         }
 
         logger::trace(
-            "Pass `{}` binds image resource `{}` at set 0 and binding {}", execution.Name,
-            binding.ImageResource, binding.Binding
+            "Pass `{}` binds image view resource `{}` at set 0 and binding {}", execution.Name,
+            binding.ImageViewResource, binding.Binding
         );
     }
 }
@@ -294,9 +338,9 @@ template<typename P> void FrameGraph::SetupPass(P &pass, PassExecution &executio
         barrier.image = GetImageHandle(resource);
 
     auto setupAttachment = [this](const auto &attachment, auto &info) {
-        info.imageView = this->GetImageViewHandle(attachment.ImageResource);
-        if (attachment.ResolveImageResource.has_value())
-            info.resolveImageView = this->GetImageViewHandle(attachment.ResolveImageResource.value());
+        info.imageView = this->GetImageViewHandle(attachment.ImageViewResource);
+        if (attachment.ResolveImageViewResource.has_value())
+            info.resolveImageView = this->GetImageViewHandle(attachment.ResolveImageViewResource.value());
     };
 
     if constexpr (HasColorAttachments<S>)
@@ -499,17 +543,26 @@ BufferResourceId FrameGraph::AddAndCreateBuffer(const std::string &name, const B
     return id;
 }
 
-std::pair<ImageResourceId, ImageViewResourceId> FrameGraph::AddAndCreateImage(
-    const std::string &name, Image &image
+ImageResourceId FrameGraph::AddAndCreateImage(const std::string &name, Image &image)
+{
+    const auto id = m_ResourceAllocator->AddImageResource(name);
+    m_ResourceAllocator->AllocateResource(id, image.Info, image.IsDevice);
+    return id;
+}
+
+ImageViewResourceId FrameGraph::AddAndCreateImageView(
+    const std::string &name, ImageView &view, ImageResourceId imageId
 )
 {
-    const auto imageId = m_ResourceAllocator->AddImageResource(name);
-    const auto viewId = m_ResourceAllocator->AddImageViewResource(std::format("{} View", name));
-    m_ResourceAllocator->AllocateResource(imageId, image.Info, image.IsDevice);
+    const auto viewId = m_ResourceAllocator->AddImageViewResource(name);
+    const auto &image = m_ImageResources.at(view.Image);
+    assert(std::ranges::contains(image.Resources, imageId) == true);
+
     vk::Image handle = m_ResourceAllocator->GetImageResource(imageId).Handle;
-    image.ViewInfo.setImage(handle);
-    m_ResourceAllocator->AllocateResource(viewId, image.ViewInfo);
-    return std::make_pair(imageId, viewId);
+    view.ViewInfo.setImage(handle);
+    m_ResourceAllocator->AllocateResource(viewId, view.ViewInfo);
+
+    return viewId;
 }
 
 std::pair<vk::Buffer, vk::DeviceSize> FrameGraph::GetBufferResource(const std::string &name)
@@ -521,7 +574,7 @@ std::pair<vk::Buffer, vk::DeviceSize> FrameGraph::GetBufferResource(
     const std::string &name, uint32_t frameInFlight
 )
 {
-    const auto bufferId = m_BufferResources.at(name).GetResourceId(frameInFlight);
+    const auto bufferId = GetBufferResourceId(name, frameInFlight);
     const auto &buffer = m_ResourceAllocator->GetBufferResource(bufferId);
     return std::make_pair(buffer.Handle, buffer.Size);
 }
@@ -535,8 +588,8 @@ vk::Image FrameGraph::GetImageHandle(const std::string &name, uint32_t frameInFl
 {
     if (name == g_SwapchainImageResourceName)
         return m_FrameInfo.Image;
-    const auto imageId = m_ImageResources.at(name).GetResourceId(frameInFlight);
-    return m_ResourceAllocator->GetImageResource(imageId.first).Handle;
+    const auto imageId = GetImageResourceId(name, frameInFlight);
+    return m_ResourceAllocator->GetImageResource(imageId).Handle;
 }
 
 vk::ImageView FrameGraph::GetImageViewHandle(const std::string &name)
@@ -546,10 +599,10 @@ vk::ImageView FrameGraph::GetImageViewHandle(const std::string &name)
 
 vk::ImageView FrameGraph::GetImageViewHandle(const std::string &name, uint32_t frameInFlight)
 {
-    if (name == g_SwapchainImageResourceName)
+    if (name == g_SwapchainImageViewResourceName)
         return m_FrameInfo.ImageView;
-    const auto imageId = m_ImageResources.at(name).GetResourceId(frameInFlight);
-    return m_ResourceAllocator->GetImageViewResource(imageId.second).Handle;
+    const auto imageViewId = GetImageViewResourceId(name, frameInFlight);
+    return m_ResourceAllocator->GetImageViewResource(imageViewId).Handle;
 }
 
 template<typename P, typename D>
@@ -638,18 +691,33 @@ void FrameGraph::Execute(vk::CommandBuffer commandBuffer, const CustomGraphicsPa
     pass.Spec.OnRender(commandBuffer);
 }
 
-BufferResourceId Buffer::GetResourceId(uint32_t frameInFlight)
+BufferResourceId FrameGraph::GetBufferResourceId(const std::string &name, uint32_t frameInFlight)
 {
-    if (IsBuffered)
-        return Resources[frameInFlight];
-    return Resources.front();
+    const auto &buffer = m_BufferResources.at(name);
+    if (buffer.IsBuffered)
+        return buffer.Resources[frameInFlight];
+    assert(buffer.Resources.size() == 1);
+    return buffer.Resources.front();
 }
 
-std::pair<ImageResourceId, ImageViewResourceId> Image::GetResourceId(uint32_t frameInFlight)
+ImageResourceId FrameGraph::GetImageResourceId(const std::string &name, uint32_t frameInFlight)
 {
-    if (IsBuffered)
-        return Resources[frameInFlight];
-    return Resources.front();
+    const auto &image = m_ImageResources.at(name);
+    if (image.IsBuffered)
+        return image.Resources[frameInFlight];
+    assert(image.Resources.size() == 1);
+    return image.Resources.front();
+}
+
+ImageViewResourceId FrameGraph::GetImageViewResourceId(const std::string &name, uint32_t frameInFlight)
+{
+    const auto &imageView = m_ImageViewResources.at(name);
+    const auto &image = m_ImageResources.at(imageView.Image);
+    assert(imageView.Resources.size() == image.Resources.size());
+    if (image.IsBuffered)
+        return imageView.Resources[frameInFlight];
+    assert(imageView.Resources.size() == 1);
+    return imageView.Resources.front();
 }
 
 template<typename F, typename... Args>

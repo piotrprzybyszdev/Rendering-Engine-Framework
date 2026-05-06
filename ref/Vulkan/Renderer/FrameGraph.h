@@ -27,20 +27,22 @@ struct Buffer
     bool IsBuffered;
     ResourceType Type;
     std::vector<BufferResourceId> Resources;
-
-    BufferResourceId GetResourceId(uint32_t frameInFlight);
 };
 
 struct Image
 {
     vk::ImageCreateInfo Info;
-    vk::ImageViewCreateInfo ViewInfo;
     bool IsDevice;
     bool IsBuffered;
     ResourceType Type;
-    std::vector<std::pair<ImageResourceId, ImageViewResourceId>> Resources;
+    std::vector<ImageResourceId> Resources;
+};
 
-    std::pair<ImageResourceId, ImageViewResourceId> GetResourceId(uint32_t frameInFlight);
+struct ImageView
+{
+    std::string Image;
+    vk::ImageViewCreateInfo ViewInfo;
+    std::vector<ImageViewResourceId> Resources;
 };
 
 struct ClearPass
@@ -199,6 +201,7 @@ struct FrameGraphSpec
 
     std::map<std::string, Buffer> Buffers;
     std::map<std::string, Image> Images;
+    std::map<std::string, ImageView> ImageViews;
 
     std::map<std::string, ClearPassInfo> ClearPasses;
     std::map<std::string, BlitPassInfo> BlitPasses;
@@ -230,6 +233,7 @@ public:
 
 public:
     static inline const std::string g_SwapchainImageResourceName = "REF Swapchain Image Resource";
+    static inline const std::string g_SwapchainImageViewResourceName = "REF Swapchain Image View Resource";
 
 public:
     FrameGraph(PipelineLibrary *pipelineLibrary, ResourceAllocator *resourceAllocator, FrameGraphSpec spec);
@@ -238,13 +242,16 @@ public:
     FrameGraph &operator=(const FrameGraph &) = delete;
 
     std::span<const BufferResourceId> GetBuffer(const std::string &name);
-    std::span<const std::pair<ImageResourceId, ImageViewResourceId>> GetImage(const std::string &name);
+    std::span<const ImageResourceId> GetImage(const std::string &name);
+    std::span<const ImageViewResourceId> GetImageView(const std::string &name);
 
     Buffer &ModifyBuffer(const std::string &name);
     Image &ModifyImage(const std::string &name);
+    ImageView &ModifyImageView(const std::string &name);
 
     void UpdateBuffer(const std::string &name);
     void UpdateImage(const std::string &name);
+    void UpdateImageView(const std::string &name);
 
     BufferResourceId GetCurrentBuffer(const std::string &name);
     ImageResourceId GetCurrentImage(const std::string &name);
@@ -270,6 +277,7 @@ private:
     uint32_t m_RenderingResourcesCount = 0;
     std::map<std::string, Buffer> m_BufferResources;
     std::map<std::string, Image> m_ImageResources;
+    std::map<std::string, ImageView> m_ImageViewResources;
 
     std::map<std::string, ClearPass> m_ClearPasses;
     std::map<std::string, BlitPass> m_BlitPasses;
@@ -290,10 +298,18 @@ private:
 
     std::vector<std::string> m_BuffersToUpdate;
     std::vector<std::string> m_ImagesToUpdate;
+    std::vector<std::string> m_ImageViewsToUpdate;
 
 private:
     BufferResourceId AddAndCreateBuffer(const std::string &name, const Buffer &buffer);
-    std::pair<ImageResourceId, ImageViewResourceId> AddAndCreateImage(const std::string &name, Image &image);
+    ImageResourceId AddAndCreateImage(const std::string &name, Image &image);
+    ImageViewResourceId AddAndCreateImageView(
+        const std::string &name, ImageView &view, ImageResourceId imageId
+    );
+
+    BufferResourceId GetBufferResourceId(const std::string &name, uint32_t frameInFlight);
+    ImageResourceId GetImageResourceId(const std::string &name, uint32_t frameInFlight);
+    ImageViewResourceId GetImageViewResourceId(const std::string &name, uint32_t frameInFlight);
 
     std::pair<vk::Buffer, vk::DeviceSize> GetBufferResource(const std::string &name);
     std::pair<vk::Buffer, vk::DeviceSize> GetBufferResource(const std::string &name, uint32_t frameInFlight);

@@ -219,6 +219,7 @@ void Renderer::OnResize(const Swapchain *swapchain)
     }
 
     m_CurrentFrameGraph->UpdateImage(FrameGraph::g_SwapchainImageResourceName);
+    m_CurrentFrameGraph->UpdateImageView(FrameGraph::g_SwapchainImageViewResourceName);
 }
 
 void Renderer::BeginFrame()

@@ -150,7 +150,7 @@ void ErrorApplicationState::OnEnter(ApplicationState * /* previous */)
     m_UserInterface = std::make_unique<ErrorUserInterface>(userInterfaceSpec, s_Errors, s_State);
 
     FrameGraphBuilder builder;
-    builder.AddDeviceImage(
+    builder.AddDeviceImageWithView(
         "Image",
         vk::ImageCreateInfo(
             vk::ImageCreateFlagBits::eMutableFormat, vk::ImageType::e2D, vk::Format::eR8G8B8A8Unorm,
@@ -168,7 +168,7 @@ void ErrorApplicationState::OnEnter(ApplicationState * /* previous */)
             .OnRender = [this](vk::CommandBuffer cmd){ m_UserInterface->OnRenderVulkan(cmd); },
             .ColorAttachments = {
                 {
-                    .ImageResource = "Image",
+                    .ImageViewResource = "Image View",
                     .LoadOp = vk::AttachmentLoadOp::eClear,
                     .ClearValue = vk::ClearColorValue(0.0f, 0.0f, 1.0f, 1.0f),
                 },
@@ -372,7 +372,7 @@ void LoadingApplicationState::OnEnter(ApplicationState * /* previous */)
     m_UserInterface = std::make_unique<LoadingUserInterface>(userInterfaceSpec, m_ProgressText);
 
     FrameGraphBuilder builder;
-    builder.AddDeviceImage(
+    builder.AddDeviceImageWithView(
         "Image",
         vk::ImageCreateInfo(
             vk::ImageCreateFlagBits::eMutableFormat, vk::ImageType::e2D, vk::Format::eR8G8B8A8Unorm,
@@ -390,7 +390,7 @@ void LoadingApplicationState::OnEnter(ApplicationState * /* previous */)
             .OnRender = [this](vk::CommandBuffer cmd){ m_UserInterface->OnRenderVulkan(cmd); },
             .ColorAttachments = {
                 {
-                    .ImageResource = "Image",
+                    .ImageViewResource = "Image View",
                     .LoadOp = vk::AttachmentLoadOp::eClear,
                     .ClearValue = vk::ClearColorValue(0.0f, 0.0f, 1.0f, 1.0f),
                 },

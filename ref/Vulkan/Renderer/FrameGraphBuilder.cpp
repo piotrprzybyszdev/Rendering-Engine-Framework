@@ -7,48 +7,6 @@
 namespace ref::vulkan
 {
 
-void FrameGraphBuilder::AddHostBuffer(
-    std::string name, vk::BufferCreateInfo info, ResourceType type, bool buffered
-)
-{
-    if (m_Spec.Buffers.contains(name))
-        logger::warn("Buffer `{}` already exists and will be overridden", name);
-
-    m_Spec.Buffers[name] = Buffer(info, false, buffered, type, {});
-}
-
-void FrameGraphBuilder::AddDeviceBuffer(
-    std::string name, vk::BufferCreateInfo info, ResourceType type, bool buffered
-)
-{
-    if (m_Spec.Buffers.contains(name))
-        logger::warn("Buffer `{}` already exists and will be overridden", name);
-
-    m_Spec.Buffers[name] = Buffer(info, true, buffered, type, {});
-}
-
-void FrameGraphBuilder::AddHostImage(
-    std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, ResourceType type,
-    bool buffered
-)
-{
-    if (m_Spec.Images.contains(name))
-        logger::warn("Image `{}` already exists and will be overridden", name);
-
-    m_Spec.Images[name] = Image(info, viewInfo, false, buffered, type, {});
-}
-
-void FrameGraphBuilder::AddDeviceImage(
-    std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, ResourceType type,
-    bool buffered
-)
-{
-    if (m_Spec.Images.contains(name))
-        logger::warn("Image `{}` already exists and will be overridden", name);
-
-    m_Spec.Images[name] = Image(info, viewInfo, true, buffered, type, {});
-}
-
 namespace
 {
 
@@ -98,6 +56,42 @@ vk::ImageViewCreateInfo ToImageViewCreateInfo(const vk::ImageCreateInfo &info)
 
 }
 
+void FrameGraphBuilder::AddHostBuffer(
+    std::string name, vk::BufferCreateInfo info, ResourceType type, bool buffered
+)
+{
+    if (m_Spec.Buffers.contains(name))
+        logger::warn("Buffer `{}` already exists and will be overridden", name);
+
+    m_Spec.Buffers[name] = Buffer(info, false, buffered, type, {});
+}
+
+void FrameGraphBuilder::AddDeviceBuffer(
+    std::string name, vk::BufferCreateInfo info, ResourceType type, bool buffered
+)
+{
+    if (m_Spec.Buffers.contains(name))
+        logger::warn("Buffer `{}` already exists and will be overridden", name);
+
+    m_Spec.Buffers[name] = Buffer(info, true, buffered, type, {});
+}
+
+void FrameGraphBuilder::AddHostImageWithView(
+    std::string name, vk::ImageCreateInfo info, ResourceType type, bool buffered
+)
+{
+    AddHostImage(name, info, type, buffered);
+    AddImageView(std::format("{} View", name), name, ToImageViewCreateInfo(info));
+}
+
+void FrameGraphBuilder::AddDeviceImageWithView(
+    std::string name, vk::ImageCreateInfo info, ResourceType type, bool buffered
+)
+{
+    AddDeviceImage(name, info, type, buffered);
+    AddImageView(std::format("{} View", name), name, ToImageViewCreateInfo(info));
+}
+
 void FrameGraphBuilder::AddHostImage(
     std::string name, vk::ImageCreateInfo info, ResourceType type, bool buffered
 )
@@ -105,7 +99,7 @@ void FrameGraphBuilder::AddHostImage(
     if (m_Spec.Images.contains(name))
         logger::warn("Image `{}` already exists and will be overridden", name);
 
-    m_Spec.Images[name] = Image(info, ToImageViewCreateInfo(info), false, buffered, type, {});
+    m_Spec.Images[name] = Image(info, false, buffered, type, {});
 }
 
 void FrameGraphBuilder::AddDeviceImage(
@@ -115,15 +109,23 @@ void FrameGraphBuilder::AddDeviceImage(
     if (m_Spec.Images.contains(name))
         logger::warn("Image `{}` already exists and will be overridden", name);
 
-    m_Spec.Images[name] = Image(info, ToImageViewCreateInfo(info), true, buffered, type, {});
+    m_Spec.Images[name] = Image(info, true, buffered, type, {});
+}
+
+void FrameGraphBuilder::AddImageView(std::string name, std::string imageName, vk::ImageViewCreateInfo info)
+{
+    if (m_Spec.ImageViews.contains(name))
+        logger::warn("Image view `{}` already exists and will be overridden", name);
+
+    m_Spec.ImageViews[name] = ImageView(imageName, info, {});
 }
 
 void WarnImageBindings(std::span<const ImageBinding> bindings)
 {
     for (const auto &binding : bindings)
-        if (binding.ImageResource == FrameGraph::g_SwapchainImageResourceName)
-            logger::warn(R"(Binding the Swapchain Image Resource to a pass requires calling every frame:
-`FrameGraph::UpdateImage(FrameGraph::g_SwapchainImageResourceName)`.
+        if (binding.ImageViewResource == FrameGraph::g_SwapchainImageViewResourceName)
+            logger::warn(R"(Binding the Swapchain Image View Resource to a pass requires calling every frame:
+`FrameGraph::UpdateImageView(FrameGraph::g_SwapchainImageViewResourceName)`.
 Consider creating a storage image and blitting the result onto the swapchain image.)");
 }
 
@@ -252,31 +254,40 @@ struct FrameGraphAccesses
 
     const std::map<std::string, Buffer> &Buffers;
     const std::map<std::string, Image> &Images;
+    const std::map<std::string, ImageView> &ImageViews;
 
     std::map<std::string, BufferAccess> BufferResources;
     std::map<std::string, std::vector<ImageAccess>> ImageResources;
 
     std::map<std::string, vk::ImageLayout> InitialImageLayouts;
 
-    vk::ImageSubresourceRange GetRange(const std::string &image)
+    const std::string& GetImage(const std::string& view)
     {
-        if (image == FrameGraph::g_SwapchainImageResourceName)
+        if (view == FrameGraph::g_SwapchainImageViewResourceName)
+            return FrameGraph::g_SwapchainImageResourceName;
+        return ImageViews.at(view).Image;
+    }
+
+    vk::ImageSubresourceRange GetRange(const std::string &view)
+    {
+        if (view == FrameGraph::g_SwapchainImageViewResourceName)
             return vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
-        return Images.at(image).ViewInfo.subresourceRange;
+        return ImageViews.at(view).ViewInfo.subresourceRange;
     };
 
     FrameGraphAccesses(
-        const std::map<std::string, Buffer> &buffers, const std::map<std::string, Image> &images
+        const std::map<std::string, Buffer> &buffers, const std::map<std::string, Image> &images,
+        const std::map<std::string, ImageView> &imageViews
     )
-        : Buffers(buffers), Images(images)
+        : Buffers(buffers), Images(images), ImageViews(imageViews)
     {
         ImageResources[FrameGraph::g_SwapchainImageResourceName].push_back(FrameGraphAccesses::ImageAccess());
 
-        for (const auto &image : Images | std::views::keys)
+        for (const auto &[name, view] : ImageViews)
         {
             ImageAccess access;
-            access.Range = GetRange(image);
-            ImageResources[image].push_back(access);
+            access.Range = GetRange(name);
+            ImageResources[view.Image].push_back(access);
         }
     }
 
@@ -526,10 +537,10 @@ struct FrameGraphAccesses
 
                 const auto &bindingInfo = pipeline.DescriptorSetBuilder.GetBinding(binding.Binding);
                 AddImageBarrier(
-                    binding.ImageResource,
+                    GetImage(binding.ImageViewResource),
                     ImageAccess(
                         toPipelineStage(bindingInfo.stageFlags), GetAccessFlags(binding), layout,
-                        GetRange(binding.ImageResource)
+                        GetRange(binding.ImageViewResource)
                     ),
                     execution
                 );
@@ -552,21 +563,21 @@ struct FrameGraphAccesses
                     attachment.StoreOp == vk::AttachmentStoreOp::eDontCare)
                     access |= vk::AccessFlagBits2::eColorAttachmentWrite;
                 AddImageBarrier(
-                    attachment.ImageResource,
+                    GetImage(attachment.ImageViewResource),
                     ImageAccess(
                         vk::PipelineStageFlagBits2::eColorAttachmentOutput, access, layout,
-                        GetRange(attachment.ImageResource)
+                        GetRange(attachment.ImageViewResource)
                     ),
                     execution
                 );
 
-                if (attachment.ResolveImageResource.has_value())
+                if (attachment.ResolveImageViewResource.has_value())
                 {
                     AddImageBarrier(
-                        attachment.ResolveImageResource.value(),
+                        GetImage(attachment.ResolveImageViewResource.value()),
                         ImageAccess(
                             vk::PipelineStageFlagBits2::eColorAttachmentOutput, access, layout,
-                            GetRange(attachment.ResolveImageResource.value())
+                            GetRange(attachment.ResolveImageViewResource.value())
                         ),
                         execution
                     );
@@ -582,9 +593,9 @@ struct FrameGraphAccesses
                 pass.ColorAttachments.push_back(rendering);
 
                 logger::trace(
-                    "Attaching image resource `{}` as color attachment to pass `{}` with (load op: {}, store "
-                    "op: {})",
-                    execution.Name, attachment.ImageResource, vk::to_string(attachment.LoadOp),
+                    "Attaching image view resource `{}` as color attachment to pass `{}` with (load op: {}, "
+                    "store op: {})",
+                    execution.Name, attachment.ImageViewResource, vk::to_string(attachment.LoadOp),
                     vk::to_string(attachment.StoreOp)
                 );
             }
@@ -608,22 +619,22 @@ struct FrameGraphAccesses
                     attachment.StoreOp == vk::AttachmentStoreOp::eDontCare)
                     access |= vk::AccessFlagBits2::eDepthStencilAttachmentWrite;
                 AddImageBarrier(
-                    attachment.ImageResource,
+                    GetImage(attachment.ImageViewResource),
                     ImageAccess(
                         vk::PipelineStageFlagBits2::eEarlyFragmentTests |
                             vk::PipelineStageFlagBits2::eLateFragmentTests,
-                        access, layout, GetRange(attachment.ImageResource)
+                        access, layout, GetRange(attachment.ImageViewResource)
                     ),
                     execution
                 );
-                if (attachment.ResolveImageResource.has_value())
+                if (attachment.ResolveImageViewResource.has_value())
                 {
                     AddImageBarrier(
-                        attachment.ResolveImageResource.value(),
+                        GetImage(attachment.ResolveImageViewResource.value()),
                         ImageAccess(
                             vk::PipelineStageFlagBits2::eEarlyFragmentTests |
                                 vk::PipelineStageFlagBits2::eLateFragmentTests,
-                            access, layout, GetRange(attachment.ResolveImageResource.value())
+                            access, layout, GetRange(attachment.ResolveImageViewResource.value())
                         ),
                         execution
                     );
@@ -639,9 +650,9 @@ struct FrameGraphAccesses
                 pass.DepthAttachment = rendering;
 
                 logger::trace(
-                    "Attaching image resource `{}` as depth attachment to pass `{}` with (load op: {}, store "
-                    "op: {})",
-                    execution.Name, attachment.ImageResource, vk::to_string(attachment.LoadOp),
+                    "Attaching image view resource `{}` as depth attachment to pass `{}` with (load op: {}, "
+                    "store op: {})",
+                    execution.Name, attachment.ImageViewResource, vk::to_string(attachment.LoadOp),
                     vk::to_string(attachment.StoreOp)
                 );
             }
@@ -665,22 +676,22 @@ struct FrameGraphAccesses
                     attachment.StoreOp == vk::AttachmentStoreOp::eDontCare)
                     access |= vk::AccessFlagBits2::eDepthStencilAttachmentWrite;
                 AddImageBarrier(
-                    attachment.ImageResource,
+                    GetImage(attachment.ImageViewResource),
                     ImageAccess(
                         vk::PipelineStageFlagBits2::eEarlyFragmentTests |
                             vk::PipelineStageFlagBits2::eLateFragmentTests,
-                        access, layout, GetRange(attachment.ImageResource)
+                        access, layout, GetRange(attachment.ImageViewResource)
                     ),
                     execution
                 );
-                if (attachment.ResolveImageResource.has_value())
+                if (attachment.ResolveImageViewResource.has_value())
                 {
                     AddImageBarrier(
-                        attachment.ResolveImageResource.value(),
+                        GetImage(attachment.ResolveImageViewResource.value()),
                         ImageAccess(
                             vk::PipelineStageFlagBits2::eEarlyFragmentTests |
                                 vk::PipelineStageFlagBits2::eLateFragmentTests,
-                            access, layout, GetRange(attachment.ResolveImageResource.value())
+                            access, layout, GetRange(attachment.ResolveImageViewResource.value())
                         ),
                         execution
                     );
@@ -696,10 +707,9 @@ struct FrameGraphAccesses
                 pass.StencilAttachment = rendering;
 
                 logger::trace(
-                    "Attaching image resource `{}` as stencil attachment to pass `{}` with (load op: {}, "
-                    "store "
-                    "op: {})",
-                    execution.Name, attachment.ImageResource, vk::to_string(attachment.LoadOp),
+                    "Attaching image view resource `{}` as stencil attachment to pass `{}` with (load op: "
+                    "{}, store op: {})",
+                    execution.Name, attachment.ImageViewResource, vk::to_string(attachment.LoadOp),
                     vk::to_string(attachment.StoreOp)
                 );
             }
@@ -768,9 +778,23 @@ void AssertImage(R images, const std::string &name, const std::string &passName)
     );
 }
 
-template<std::ranges::input_range R1, std::ranges::input_range R2, typename P>
+template<std::ranges::input_range R>
+void AssertImageView(R views, const std::string &name, const std::string &passName)
+{
+    if (name == FrameGraph::g_SwapchainImageViewResourceName)
+        return;
+
+    if (std::ranges::contains(views, name))
+        return;
+
+    throw std::runtime_error(
+        std::format("Image view `{}` is required by pass `{}` but was not declared", name, passName)
+    );
+}
+
+template<std::ranges::input_range R1, std::ranges::input_range R2, std::ranges::input_range R3, typename P>
 void ValidatePass(
-    const P &pass, R1 buffers, R2 images, const std::string &passName, PipelineLibrary *pipelineLibrary
+    const P &pass, R1 buffers, R2 images, R3 views, const std::string &passName, PipelineLibrary *pipelineLibrary
 )
 {
     const auto &spec = pass.Spec;
@@ -825,13 +849,13 @@ void ValidatePass(
             if (!pipeline.DescriptorSetBuilder.HasBinding(binding.Binding))
                 throw std::runtime_error(
                     std::format(
-                        "Image `{}` is bound to pass `{}` at binding {} but pipeline `{}` used by the pass "
+                        "Image view `{}` is bound to pass `{}` at binding {} but pipeline `{}` used by the pass "
                         "does not contain the binding",
-                        binding.ImageResource, passName, binding.Binding, pipeline.Name
+                        binding.ImageViewResource, passName, binding.Binding, pipeline.Name
                     )
                 );
 
-            AssertImage(images, binding.ImageResource, passName);
+            AssertImageView(views, binding.ImageViewResource, passName);
         }
 
         for (int32_t binding = 0; binding <= pipeline.DescriptorSetBuilder.GetMaxBinding(); binding++)
@@ -854,7 +878,7 @@ void ValidatePass(
     if constexpr (HasColorAttachments<S>)
     {
         for (const auto &attachment : spec.ColorAttachments)
-            AssertImage(images, attachment.ImageResource, passName);
+            AssertImageView(views, attachment.ImageViewResource, passName);
     }
 
     if constexpr (HasDepthAttachment<S>)
@@ -862,7 +886,7 @@ void ValidatePass(
         if (spec.DepthAttachment.has_value())
         {
             const auto &attachment = spec.DepthAttachment.value();
-            AssertImage(images, attachment.ImageResource, passName);
+            AssertImageView(views, attachment.ImageViewResource, passName);
         }
     }
 
@@ -871,7 +895,7 @@ void ValidatePass(
         if (spec.StencilAttachment.has_value())
         {
             const auto &attachment = spec.StencilAttachment.value();
-            AssertImage(images, attachment.ImageResource, passName);
+            AssertImageView(views, attachment.ImageViewResource, passName);
         }
     }
 
@@ -896,18 +920,18 @@ std::unique_ptr<FrameGraph> FrameGraphBuilder::CreateUnique(
     PipelineLibrary *pipelineLibrary, ResourceAllocator *resourceAllocator
 )
 {
-    FrameGraphAccesses frameGraphAccess(m_Spec.Buffers, m_Spec.Images);
+    FrameGraphAccesses frameGraphAccess(m_Spec.Buffers, m_Spec.Images, m_Spec.ImageViews);
 
     for (const auto &execution : m_Spec.PassExecutions)
     {
-        auto validatePass = [](auto &pass, auto buffers, auto images, const std::string &passName,
+        auto validatePass = [](auto &pass, auto buffers, auto images, auto views, const std::string &passName,
                                PipelineLibrary *pipelineLibrary) {
-            ValidatePass(pass, buffers, images, passName, pipelineLibrary);
+            ValidatePass(pass, buffers, images, views, passName, pipelineLibrary);
         };
 
         Dispatch(
             execution, validatePass, m_Spec.Buffers | std::views::keys, m_Spec.Images | std::views::keys,
-            execution.Name, pipelineLibrary
+            m_Spec.ImageViews | std::views::keys, execution.Name, pipelineLibrary
         );
     }
 

@@ -24,7 +24,7 @@ struct BufferBinding
 
 struct ImageBinding
 {
-    std::string ImageResource;
+    std::string ImageViewResource;
     uint32_t Binding;
     vk::Sampler Sampler;
     bool Read, Write;
@@ -69,12 +69,12 @@ struct ComputePassSpec
 
 struct PassAttachmentSpec
 {
-    std::string ImageResource;
+    std::string ImageViewResource;
     vk::AttachmentLoadOp LoadOp = vk::AttachmentLoadOp::eLoad;
     vk::AttachmentStoreOp StoreOp = vk::AttachmentStoreOp::eStore;
     vk::ClearValue ClearValue;
 
-    std::optional<std::string> ResolveImageResource;
+    std::optional<std::string> ResolveImageViewResource;
     vk::ResolveModeFlagBits ResolveMode = vk::ResolveModeFlagBits::eNone;
 };
 

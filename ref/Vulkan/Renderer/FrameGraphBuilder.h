@@ -19,17 +19,13 @@ public:
     void AddHostBuffer(std::string name, vk::BufferCreateInfo info, ResourceType type, bool buffered);
     void AddDeviceBuffer(std::string name, vk::BufferCreateInfo info, ResourceType type, bool buffered);
 
-    void AddHostImage(
-        std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, ResourceType type,
-        bool buffered
-    );
-    void AddDeviceImage(
-        std::string name, vk::ImageCreateInfo info, vk::ImageViewCreateInfo viewInfo, ResourceType type,
-        bool buffered
-    );
+    void AddHostImageWithView(std::string name, vk::ImageCreateInfo info, ResourceType type, bool persistent);
+    void AddDeviceImageWithView(std::string name, vk::ImageCreateInfo info, ResourceType type, bool persistent);
 
-    void AddHostImage(std::string name, vk::ImageCreateInfo info, ResourceType type, bool buffered);
-    void AddDeviceImage(std::string name, vk::ImageCreateInfo info, ResourceType type, bool buffered);
+    void AddHostImage(std::string name, vk::ImageCreateInfo info, ResourceType type, bool persistent);
+    void AddDeviceImage(std::string name, vk::ImageCreateInfo info, ResourceType type, bool persistent);
+    
+    void AddImageView(std::string name, std::string imageName, vk::ImageViewCreateInfo info);
 
     void AddClearPass(std::string name, ClearPassSpec spec);
     void AddBlitPass(std::string name, BlitPassSpec spec);
