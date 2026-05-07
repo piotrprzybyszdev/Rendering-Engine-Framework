@@ -17,7 +17,7 @@ target_compile_definitions(ref PRIVATE
 )
 
 target_compile_options(ref PRIVATE
-  $<$<CXX_COMPILER_ID:MSVC>:/W4 /WX /MP>
+  $<$<CXX_COMPILER_ID:MSVC>:/W4 /WX>
   $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic -Werror -Wno-missing-field-initializers>
   $<$<NOT:$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:MSVC>>>:-Wno-nullability-extension>
 )

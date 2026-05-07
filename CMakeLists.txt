@@ -16,6 +16,10 @@ include(${CMAKE_SOURCE_DIR}/cmake/ConfigureVulkan.cmake)
 add_configuration(TRACE DEBUG TRUE)
 add_configuration(PROFILE RELEASE FALSE)
 
+if (REF_BUILD_DEMOS)
+    add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/MP>)
+endif()
+
 add_subdirectory(ref)
 
 add_subdirectory(vendor/spdlog)

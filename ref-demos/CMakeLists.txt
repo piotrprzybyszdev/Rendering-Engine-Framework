@@ -19,7 +19,7 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/Shaders PREFIX "Shaders/Sources" F
 target_include_directories(ref-demos PRIVATE ${PROJECT_SOURCE_DIR}/ref-demos)
 
 target_compile_options(ref-demos PRIVATE
-  $<$<CXX_COMPILER_ID:MSVC>:/W4 /WX /MP>
+  $<$<CXX_COMPILER_ID:MSVC>:/W4 /WX>
   $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic -Werror -Wno-missing-field-initializers>
   $<$<CXX_COMPILER_ID:Clang>:-Wno-nullability-extension>
 )
