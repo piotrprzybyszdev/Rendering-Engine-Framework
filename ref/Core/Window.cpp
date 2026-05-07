@@ -14,7 +14,7 @@ namespace ref
 void Window::InitSystem(WindowSystemErrorCallback callback)
 {
     if (glfwInit() == GLFW_FALSE)
-        throw std::runtime_error("Window System Initialization failed");
+        throw initialization_error("Window System Initialization failed");
 
     glfwSetErrorCallback(callback);
 }
@@ -40,7 +40,7 @@ Window::Window(const char *title, uint16_t width, uint16_t height)
     m_Handle = glfwCreateWindow(width, height, title, nullptr, nullptr);
 
     if (m_Handle == nullptr)
-        throw std::runtime_error("Window creation failed");
+        throw initialization_error("Window creation failed");
 }
 
 Window::~Window()
@@ -81,13 +81,13 @@ vk::SurfaceKHR Window::CreateVulkanSurface(vk::Instance instance) const
     VkSurfaceKHR surface = nullptr;
     VkResult result = glfwCreateWindowSurface(instance, m_Handle, nullptr, &surface);
     if (result != VkResult::VK_SUCCESS)
-        throw std::runtime_error("Window surface cration failed");
+        throw initialization_error("Window surface cration failed");
     return surface;
 }
 
 void DefaultWindowSystemErrorCallback(int error, const char *description)
 {
-    throw std::runtime_error(std::format("GLFW error {} {}", error, description).c_str());
+    logger::error("GLFW error {} {}", error, description);
 }
 
 }

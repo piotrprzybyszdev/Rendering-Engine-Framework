@@ -183,7 +183,7 @@ void UserInterface::OnEnter()
 
     bool imguiResult = ImGui_ImplVulkan_Init(&initInfo);
     if (imguiResult == false)
-        throw std::runtime_error("Failed to initialize ImGui");
+        throw initialization_error("Failed to initialize ImGui");
 }
 
 void UserInterface::OnExit()

@@ -9,6 +9,7 @@
 namespace ref::vulkan
 {
 
+static bool s_ValidationEnabled = false;
 static uint32_t s_ValidationWarningCount = 0;
 static uint32_t s_ValidationErrorCount = 0;
 
@@ -36,6 +37,7 @@ VKAPI_ATTR vk::Bool32 VKAPI_CALL DefaultDebugCallback(
         break;
     }
 
+    s_ValidationEnabled = true;
     return VK_FALSE;
 }
 
@@ -50,12 +52,15 @@ void ApplicationBuilder::ShutdownSystems()
     UserInterface::ShutdownSystem();
     Window::ShutdownSystem();
 
-    if (s_ValidationWarningCount)
-        logger::warn("Encountered {} validation layer warnings", s_ValidationWarningCount);
-    if (s_ValidationErrorCount)
-        logger::error("Encountered {} validation layer errors", s_ValidationErrorCount);
-    if (s_ValidationWarningCount == 0 && s_ValidationErrorCount == 0)
-        logger::info("Validation layers raised no issues");
+    if (s_ValidationEnabled)
+    {
+        if (s_ValidationWarningCount)
+            logger::warn("Encountered {} validation layer warnings", s_ValidationWarningCount);
+        if (s_ValidationErrorCount)
+            logger::error("Encountered {} validation layer errors", s_ValidationErrorCount);
+        if (s_ValidationWarningCount == 0 && s_ValidationErrorCount == 0)
+            logger::info("Validation layers raised no issues");
+    }
 }
 
 ApplicationBuilder &ApplicationBuilder::EnableBase()
@@ -186,7 +191,7 @@ ApplicationBuilder &ApplicationBuilder::AddQueue(QueueSpec queueSpec)
 {
     for (const char *excludes : queueSpec.Exclusive)
         if (!std::ranges::contains(m_QueueSpecs, excludes, [](auto &spec) { return spec.Name; }))
-            throw std::runtime_error(
+            throw configuration_error(
                 std::format(
                     "Queue `{}` excludes queue `{}` that was not added yet. Add that queue first.",
                     queueSpec.Name, excludes
@@ -194,7 +199,7 @@ ApplicationBuilder &ApplicationBuilder::AddQueue(QueueSpec queueSpec)
             );
 
     if (std::ranges::contains(m_QueueSpecs, queueSpec.Name, [](auto &spec) { return spec.Name; }))
-        throw std::runtime_error(std::format("Queue with name `{}` is already added", queueSpec.Name));
+        throw configuration_error(std::format("Queue with name `{}` is already added", queueSpec.Name));
 
     m_QueueSpecs.push_back(queueSpec);
     return *this;
@@ -211,7 +216,7 @@ Application ApplicationBuilder::CreateApplication(const char *name, uint32_t ver
 {
     // Instance
     if (!CheckInstance())
-        throw std::runtime_error("Instance does not support requested api version, extensions or layers");
+        throw initialization_error("Instance does not support requested api version, extensions or layers");
 
     logger::info("Selected Vulkan Version: {}", ApiVersionToString(m_ApiVersion));
     vk::ApplicationInfo applicationInfo(name, version, m_EngineName, m_EngineVersion, m_ApiVersion);
@@ -253,7 +258,7 @@ Application ApplicationBuilder::CreateApplication(const char *name, uint32_t ver
     }
 
     if (suitableDevices.empty())
-        throw std::runtime_error("No suitable devices found");
+        throw initialization_error("No suitable devices found");
 
     vk::PhysicalDevice physicalDevice = *std::ranges::max_element(
         suitableDevices, [](vk::PhysicalDevice device1, vk::PhysicalDevice device2) {
@@ -467,7 +472,7 @@ std::vector<uint32_t> ApplicationBuilder::FindQueueFamilyIndices(
 
     auto checkPresent = [&](const QueueSpec &spec, uint32_t queueFamilyIndex) {
         if (surface == nullptr)
-            throw std::runtime_error(
+            throw configuration_error(
                 std::format(
                     "Queue `{}` was specified to have the ability to present but no surface was "
                     "provided",
@@ -487,7 +492,7 @@ std::vector<uint32_t> ApplicationBuilder::FindQueueFamilyIndices(
 
             if (i >= queueFamilyIndices.size())
             {
-                throw std::runtime_error(
+                throw configuration_error(
                     std::format(
                         "Queue `{}` excludes queue `{}` and queue `{}` was declared before queue `{}`. Queue "
                         "`{}` should be declared before queue `{}`",

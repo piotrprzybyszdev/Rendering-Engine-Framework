@@ -124,7 +124,7 @@ void ErrorApplicationState::OnEnter(ApplicationState * /* previous */)
 
     vk::Format format = GetSurfaceFormat(spec.SwapchainBuilder);
     if (format == vk::Format::eUndefined)
-        throw std::runtime_error("No suitable swapchain format found");
+        throw initialization_error("No suitable swapchain format found");
 
     spec.SwapchainBuilder->SetPresentMode(vk::PresentModeKHR::eFifo);
     const uint32_t imageCount =
@@ -344,7 +344,7 @@ void LoadingApplicationState::OnEnter(ApplicationState * /* previous */)
 
     vk::Format format = GetSurfaceFormat(spec.SwapchainBuilder);
     if (format == vk::Format::eUndefined)
-        throw std::runtime_error("No suitable swapchain format found");
+        throw initialization_error("No suitable swapchain format found");
 
     spec.SwapchainBuilder->SetSurfaceFormat(format);
     spec.SwapchainBuilder->SetPresentMode(vk::PresentModeKHR::eFifo);

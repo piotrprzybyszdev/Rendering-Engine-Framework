@@ -30,7 +30,7 @@ void ConfigureShaders(ref::vulkan::Application& application)
     application.GetShaderLibrary().AddShadersFromDirectory("Shaders");
 }
 
-int main()
+void Run()
 {
     logger::set_level(logger::level::debug);
 
@@ -58,6 +58,34 @@ int main()
     }
 
     vulkan::ApplicationBuilder::ShutdownSystems();
+}
+
+int main()
+{
+#ifdef NDEBUG
+    try
+    {
+        Run();
+    }
+    catch (const ref::initialization_error &error)
+    {
+        ref::logger::critical("Initialization error: {}", error.what());
+    }
+    catch (const ref::configuration_error& error)
+    {
+        ref::logger::critical("Configuration error: {}", error.what());
+    }
+    catch (const std::exception &error)
+    {
+        ref::logger::critical("Unexpected error: {}", error.what());
+    }
+    catch (...)
+    {
+        ref::logger::critical("Unknown error");
+    }
+#else
+    Run();
+#endif
 
     return 0;
 }

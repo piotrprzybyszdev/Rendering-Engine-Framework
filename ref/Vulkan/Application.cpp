@@ -22,7 +22,7 @@ Application::Application(ApplicationSpec &&spec)
       m_SwapchainBuilder(spec.PhysicalDevice, spec.Surface)
 {
     if (s_Instance != nullptr)
-        throw std::runtime_error("Only one instance of the application must exist");
+        throw initialization_error("Only one instance of the application must exist");
 
     s_Instance = this;
 
@@ -177,6 +177,24 @@ void Application::SetNextState(const std::string &name)
 void Application::SetRecreateSwapchain()
 {
     m_RecreateSwapchain = true;
+}
+
+void Application::BeginDebugLabel(
+    vk::CommandBuffer commandBuffer, const char *name, const std::array<float, 4> &color
+)
+{
+    if (!m_DebugMessenger.has_value())
+        return;
+    commandBuffer.beginDebugUtilsLabelEXT(
+        vk::DebugUtilsLabelEXT(name, color), *s_Instance->GetApplicationStateSpec().DispatchLoader
+    );
+}
+
+void Application::EndDebugLabel(vk::CommandBuffer commandBuffer)
+{
+    if (!m_DebugMessenger.has_value())
+        return;
+    commandBuffer.endDebugUtilsLabelEXT(*s_Instance->GetApplicationStateSpec().DispatchLoader);
 }
 
 }

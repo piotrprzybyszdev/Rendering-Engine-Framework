@@ -21,7 +21,7 @@ vk::ImageViewType ToImageViewType(vk::ImageType type)
     case vk::ImageType::e3D:
         return vk::ImageViewType::e3D;
     default:
-        throw std::runtime_error("Unsupported image type");
+        std::terminate();
     }
 }
 
@@ -132,7 +132,7 @@ Consider creating a storage image and blitting the result onto the swapchain ima
 template<typename T> void AssertPass(const std::map<std::string, T> &passes, const std::string &name)
 {
     if (passes.contains(name))
-        throw std::runtime_error(std::format("Pass `{}` already exists", name));
+        throw configuration_error(std::format("Pass `{}` already exists", name));
 }
 
 void FrameGraphBuilder::AddClearPass(std::string name, ClearPassSpec spec)
@@ -759,7 +759,7 @@ void AssertBuffer(R buffers, const std::string &name, const std::string &passNam
     if (std::ranges::contains(buffers, name))
         return;
 
-    throw std::runtime_error(
+    throw configuration_error(
         std::format("Buffer `{}` is required by pass `{}` but was not declared", name, passName)
     );
 }
@@ -773,7 +773,7 @@ void AssertImage(R images, const std::string &name, const std::string &passName)
     if (std::ranges::contains(images, name))
         return;
 
-    throw std::runtime_error(
+    throw configuration_error(
         std::format("Image `{}` is required by pass `{}` but was not declared", name, passName)
     );
 }
@@ -787,7 +787,7 @@ void AssertImageView(R views, const std::string &name, const std::string &passNa
     if (std::ranges::contains(views, name))
         return;
 
-    throw std::runtime_error(
+    throw configuration_error(
         std::format("Image view `{}` is required by pass `{}` but was not declared", name, passName)
     );
 }
@@ -805,7 +805,7 @@ void ValidatePass(
         const auto &pipeline = pipelineLibrary->GetPipelineInstance(spec.Pipeline);
         const auto &info = pipelineLibrary->GetPipelineInstanceInfo(spec.Pipeline);
         if (!pipeline.IsValid())
-            throw std::runtime_error(
+            throw configuration_error(
                 std::format(
                     "Pipeline instance `{}` used in pass `{}` was is not compiled", info.Name, passName
                 )
@@ -833,7 +833,7 @@ void ValidatePass(
         for (const auto &binding : spec.BufferBindings)
         {
             if (!pipeline.DescriptorSetBuilder.HasBinding(binding.Binding))
-                throw std::runtime_error(
+                throw configuration_error(
                     std::format(
                         "Buffer `{}` is bound to pass `{}` at binding {} but pipeline `{}` used by the pass "
                         "does not contain the binding",
@@ -847,9 +847,10 @@ void ValidatePass(
         for (const auto &binding : spec.ImageBindings)
         {
             if (!pipeline.DescriptorSetBuilder.HasBinding(binding.Binding))
-                throw std::runtime_error(
+                throw configuration_error(
                     std::format(
-                        "Image view `{}` is bound to pass `{}` at binding {} but pipeline `{}` used by the pass "
+                        "Image view `{}` is bound to pass `{}` at binding {} but pipeline `{}` used by the "
+                        "pass "
                         "does not contain the binding",
                         binding.ImageViewResource, passName, binding.Binding, pipeline.Name
                     )
@@ -866,7 +867,7 @@ void ValidatePass(
             auto proj = [](const auto &bnd) { return bnd.Binding; };
             if (!std::ranges::contains(spec.BufferBindings, binding, proj) &&
                 !std::ranges::contains(spec.ImageBindings, binding, proj))
-                throw std::runtime_error(
+                throw configuration_error(
                     std::format(
                         "Pipeline `{}` expects a binding at {} but no resource was bound", pipeline.Name,
                         binding

@@ -32,4 +32,22 @@ template<typename T, typename P, T Sentinel = std::numeric_limits<T>::max()> str
     T Value = Sentinel;
 };
 
+class error : public std::runtime_error
+{
+public:
+    using runtime_error::runtime_error;
+};
+
+class initialization_error : public error
+{
+public:
+    using error::error;
+};
+
+class configuration_error : public error
+{
+public:
+    using error::error;
+};
+
 }

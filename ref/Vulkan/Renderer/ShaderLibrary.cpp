@@ -36,7 +36,7 @@ shaderc_shader_kind ToShaderKind(vk::ShaderStageFlagBits stage)
     case vk::ShaderStageFlagBits::eGeometry:
         return shaderc_shader_kind::shaderc_geometry_shader;
     default:
-        throw std::runtime_error("Unsupported shader stage");
+        throw configuration_error("Unsupported shader stage");
     }
 }
 
@@ -76,7 +76,7 @@ vk::Format ToFormat(uint32_t components, spirv_cross::SPIRType::BaseType type)
     if (type == Type::UInt && components == 4)
         return vk::Format::eR32G32B32A32Uint;
 
-    throw std::runtime_error("Unsupported base type or component count");
+    throw configuration_error("Unsupported base type or component count");
 }
 
 struct FileInfo
@@ -90,8 +90,7 @@ struct FileInfo
 FileInfo ReadFileInfo(const std::filesystem::path &path)
 {
     std::ifstream file(path, std::ios::ate | std::ios::binary);
-    if (!file.is_open())
-        throw std::runtime_error(std::format("Shader file {} cannot be opened", path.string()));
+    assert(file.is_open());
 
     size_t size = file.tellg();
     file.seekg(0);
@@ -439,7 +438,7 @@ ShaderId ShaderLibrary::AddShader(ShaderInfo info)
             return info.Path.filename() == other.Path.filename();
         });
         if (it != m_ShaderInfos.end())
-            throw std::runtime_error(
+            throw configuration_error(
                 std::format(
                     "Two shaders with the same filename `{}` are not allowed", info.Path.filename().string()
                 )
@@ -720,7 +719,7 @@ void ReflectionData::Combine(const ReflectionData &other)
         {
             if (it->descriptorCount != binding.descriptorCount ||
                 it->descriptorType != binding.descriptorType)
-                throw std::runtime_error(std::format("Binding {} mismatch", binding.binding));
+                throw configuration_error(std::format("Binding {} mismatch", binding.binding));
             it->stageFlags |= binding.stageFlags;
         }
         else

@@ -83,20 +83,6 @@ std::vector<std::byte> DeserializePipelineCache(const std::filesystem::path &pat
 PipelineLibrary::PipelineLibrary(vk::Device logicalDevice, ShaderLibrary *shaderLibrary)
     : m_LogicalDevice(logicalDevice), m_ShaderLibrary(shaderLibrary)
 {
-    const std::filesystem::path path = GetCachePath();
-    if (!std::filesystem::exists(path))
-    {
-        logger::debug("Pipeline cache was not found");
-        m_PipelineCache = m_LogicalDevice.createPipelineCache(vk::PipelineCacheCreateInfo());
-        return;
-    }
-
-    const std::vector<std::byte> cache = DeserializePipelineCache(path);
-
-    vk::PipelineCacheCreateInfo info;
-    info.setPInitialData(cache.data());
-    info.setInitialDataSize(cache.size());
-    m_PipelineCache = m_LogicalDevice.createPipelineCache(info);
 }
 
 PipelineLibrary::~PipelineLibrary()
@@ -120,6 +106,24 @@ PipelineLibrary::~PipelineLibrary()
 void PipelineLibrary::SetPipelineCachePath(const std::filesystem::path &path)
 {
     m_PipelineCachePath = path;
+
+    const std::filesystem::path cahcePath = GetCachePath();
+    if (!std::filesystem::exists(cahcePath))
+    {
+        logger::debug("Pipeline cache was not found");
+        if (m_PipelineCache == nullptr)
+            m_PipelineCache = m_LogicalDevice.createPipelineCache(vk::PipelineCacheCreateInfo());
+        return;
+    }
+
+    const std::vector<std::byte> cache = DeserializePipelineCache(cahcePath);
+
+    m_LogicalDevice.destroyPipelineCache(m_PipelineCache);
+
+    vk::PipelineCacheCreateInfo info;
+    info.setPInitialData(cache.data());
+    info.setInitialDataSize(cache.size());
+    m_PipelineCache = m_LogicalDevice.createPipelineCache(info);
 }
 
 ComputePipelineId PipelineLibrary::AddPipeline(ComputePipelineInfo pipelineInfo)
@@ -440,7 +444,7 @@ bool PipelineLibrary::CompilePipelineInstance(GraphicsPipelineInstanceId id)
         const size_t required = m_ShaderLibrary->GetShader(vertexShaderId).Reflection.InputAttributes.size();
         const size_t provided = pipelineInstanceInfo.VertexInputs.size();
         if (required > provided)
-            throw std::runtime_error(
+            throw configuration_error(
                 std::format(
                     "Vertex shader requires {} inputs but pipeline instnace {} provided only {}", required,
                     pipelineInstanceInfo.Name, provided

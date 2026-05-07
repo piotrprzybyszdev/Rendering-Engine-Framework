@@ -68,7 +68,7 @@ Features::Features(const Features &other)
             *pNext = GetNext<vk::PhysicalDeviceVulkan14Features>(pNext);
             break;
         default:
-            throw std::runtime_error("Unsupported physical devcie features");
+            std::terminate();
         }
         i++;
     }
@@ -106,7 +106,7 @@ bool Features::CompareFeatures(const Features &other)
             pNext = GetNext<vk::PhysicalDeviceVulkan14Features>(pNext);
             break;
         default:
-            throw std::runtime_error("Unsupported physical devcie features");
+            std::terminate();
         }
 
         i++;

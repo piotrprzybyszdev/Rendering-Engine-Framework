@@ -480,7 +480,7 @@ void FrameGraph::OnRender(vk::CommandBuffer commandBuffer)
         case PassType::CustomGraphics:
             return colors[4];
         default:
-            throw std::runtime_error("Unsupported PassType");
+            std::terminate();
         }
     };
 
@@ -498,13 +498,9 @@ void FrameGraph::OnRender(vk::CommandBuffer commandBuffer)
 
     for (const auto &execution : m_PassExecutions)
     {
-#if defined(REF_CONFIG_DEBUG) || defined(REF_CONFIG_TRACE) || defined(REF_CONFIG_PROFILE)
-
-        commandBuffer.beginDebugUtilsLabelEXT(
-            vk::DebugUtilsLabelEXT(execution.Name.c_str(), getColor(execution.Type)),
-            *Application::GetInstance()->GetApplicationStateSpec().DispatchLoader
+        Application::GetInstance()->BeginDebugLabel(
+            commandBuffer, execution.Name.c_str(), getColor(execution.Type)
         );
-#endif
 
         vk::DependencyInfo dependency;
         dependency.setBufferMemoryBarriers(execution.BufferBarriers.Barriers);
@@ -516,11 +512,8 @@ void FrameGraph::OnRender(vk::CommandBuffer commandBuffer)
         };
 
         Dispatch(execution, executePass, this, commandBuffer);
-#if defined(REF_CONFIG_DEBUG) || defined(REF_CONFIG_TRACE) || defined(REF_CONFIG_PROFILE)
-        commandBuffer.endDebugUtilsLabelEXT(
-            *Application::GetInstance()->GetApplicationStateSpec().DispatchLoader
-        );
-#endif
+
+        Application::GetInstance()->EndDebugLabel(commandBuffer);
     }
 
     for (auto &&[name, barrier] : std::views::zip(m_BottomOfPipeBufferNames, m_BottomOfPipeBufferBarriers))
@@ -555,8 +548,7 @@ ImageViewResourceId FrameGraph::AddAndCreateImageView(
 )
 {
     const auto viewId = m_ResourceAllocator->AddImageViewResource(name);
-    const auto &image = m_ImageResources.at(view.Image);
-    assert(std::ranges::contains(image.Resources, imageId) == true);
+    assert(std::ranges::contains(m_ImageResources.at(view.Image).Resources, imageId) == true);
 
     vk::Image handle = m_ResourceAllocator->GetImageResource(imageId).Handle;
     view.ViewInfo.setImage(handle);

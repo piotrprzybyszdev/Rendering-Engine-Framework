@@ -23,7 +23,7 @@ ResourceAllocator::ResourceAllocator(ResourceManagerSpec spec) : m_LogicalDevice
 
     VkResult result = vmaCreateAllocator(&allocatorInfo, &m_Allocator);
     if (result != VkResult::VK_SUCCESS)
-        throw std::runtime_error("Failed to initialize resource manager");
+        throw initialization_error("Failed to initialize resource manager");
 }
 
 ResourceAllocator::~ResourceAllocator()

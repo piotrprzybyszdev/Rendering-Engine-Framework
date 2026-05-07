@@ -61,6 +61,11 @@ public:
     template<typename T> requires vk::isVulkanHandleType<T>::value
     void SetDebugName(T handle, const char *name);
 
+    void BeginDebugLabel(
+        vk::CommandBuffer commandBuffer, const char *name, const std::array<float, 4> &color
+    );
+    void EndDebugLabel(vk::CommandBuffer commandBuffer);
+
     template<typename S, typename... Args> requires std::is_base_of_v<ApplicationState, S>
     void AddAndCreateState(const std::string &name, Args&&...args);
 
