@@ -121,6 +121,8 @@ DescriptorSetBuilder &vulkan::DescriptorSetBuilder::operator=(
     DescriptorSetBuilder &&descriptorSetBuilder
 ) noexcept
 {
+    this->~DescriptorSetBuilder();
+
     m_LogicalDevice = std::move(descriptorSetBuilder.m_LogicalDevice);
     m_Bindings = std::move(descriptorSetBuilder.m_Bindings);
     m_Types = std::move(descriptorSetBuilder.m_Types);
@@ -193,6 +195,7 @@ vk::DescriptorSetLayout DescriptorSetBuilder::CreateLayout()
     vk::DescriptorSetLayoutCreateInfo layoutCreateInfo(vk::DescriptorSetLayoutCreateFlags(), usedBindings);
     layoutCreateInfo.setPNext(&flagsCreateInfo);
 
+    m_LogicalDevice.destroyDescriptorSetLayout(m_Layout);
     m_Layout = m_LogicalDevice.createDescriptorSetLayout(layoutCreateInfo);
     return m_Layout;
 }

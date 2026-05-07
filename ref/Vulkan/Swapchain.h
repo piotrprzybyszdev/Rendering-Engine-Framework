@@ -38,11 +38,12 @@ public:
 
 public:
     Swapchain(vk::Device device, const SwapchainSpec &spec, const Swapchain *old = nullptr);
+    ~Swapchain();
 
     Swapchain(const Swapchain &) = delete;
     Swapchain &operator=(const Swapchain &) = delete;
 
-    bool AcquireImage(vk::Device device);
+    bool AcquireImage();
     bool Present(vk::Queue queue);
 
     vk::SurfaceKHR GetSurface() const;
@@ -55,6 +56,7 @@ public:
     const SynchronizationObjects &GetCurrentSynchronizationObjects() const;
 
 private:
+    const vk::Device m_LogicalDevice;
     const vk::SurfaceKHR m_Surface;
     const vk::PresentModeKHR m_PresentMode;
     const vk::SurfaceFormatKHR m_SurfaceFormat;

@@ -9,8 +9,9 @@ namespace ref::vulkan
 {
 
 Swapchain::Swapchain(vk::Device device, const SwapchainSpec &spec, const Swapchain *old)
-    : m_Surface(spec.Surface), m_PresentMode(spec.PresentMode), m_SurfaceFormat(spec.SurfaceFormat),
-      m_Extent(spec.Extent), m_ImageCount(spec.ImageCount), m_InFlightCount(m_ImageCount - 1)
+    : m_LogicalDevice(device), m_Surface(spec.Surface), m_PresentMode(spec.PresentMode),
+      m_SurfaceFormat(spec.SurfaceFormat), m_Extent(spec.Extent), m_ImageCount(spec.ImageCount),
+      m_InFlightCount(m_ImageCount - 1)
 {
     logger::debug("Current present mode: {}", vk::to_string(m_PresentMode));
     logger::debug("Swapchain Image Count: {}", m_ImageCount);
@@ -31,24 +32,24 @@ Swapchain::Swapchain(vk::Device device, const SwapchainSpec &spec, const Swapcha
         vk::CompositeAlphaFlagBitsKHR::eOpaque, m_PresentMode, vk::True, oldSwapchainHandle
     );
 
-    m_Handle = device.createSwapchainKHR(createInfo);
+    m_Handle = m_LogicalDevice.createSwapchainKHR(createInfo);
 
     for (const Frame &frame : m_Frames)
-        device.destroyImageView(frame.ImageView);
+        m_LogicalDevice.destroyImageView(frame.ImageView);
     m_Frames.clear();
 
     uint32_t i = 0;
-    for (vk::Image image : device.getSwapchainImagesKHR(m_Handle))
+    for (vk::Image image : m_LogicalDevice.getSwapchainImagesKHR(m_Handle))
     {
         vk::ImageViewCreateInfo imageViewCreateInfo(
             vk::ImageViewCreateFlags(), image, vk::ImageViewType::e2D, m_SurfaceFormat.format,
             vk::ComponentMapping(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1)
         );
 
-        auto imageView = device.createImageView(imageViewCreateInfo);
+        auto imageView = m_LogicalDevice.createImageView(imageViewCreateInfo);
         m_Frames.emplace_back(image, imageView);
 
-        m_RenderCompleteSemaphores.emplace_back(device.createSemaphore(vk::SemaphoreCreateInfo()));
+        m_RenderCompleteSemaphores.emplace_back(m_LogicalDevice.createSemaphore(vk::SemaphoreCreateInfo()));
 
         Application::GetInstance()->SetDebugName(
             m_Frames.back().Image, std::format("Swapchain Image {}", i).c_str()
@@ -67,9 +68,9 @@ Swapchain::Swapchain(vk::Device device, const SwapchainSpec &spec, const Swapcha
     i = 0;
     while (m_InFlightFences.size() < m_Frames.size())
     {
-        m_ImageAcquiredSemaphores.push_back(device.createSemaphore(vk::SemaphoreCreateInfo()));
+        m_ImageAcquiredSemaphores.push_back(m_LogicalDevice.createSemaphore(vk::SemaphoreCreateInfo()));
         m_InFlightFences.push_back(
-            device.createFence(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled))
+            m_LogicalDevice.createFence(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled))
         );
 
         Application::GetInstance()->SetDebugName(
@@ -82,9 +83,20 @@ Swapchain::Swapchain(vk::Device device, const SwapchainSpec &spec, const Swapcha
         i++;
     }
 
-    device.destroySwapchainKHR(oldSwapchainHandle);
-
     UpdateCurrentSyncronizationObjects();
+}
+
+Swapchain::~Swapchain()
+{
+    for (const auto &frame : m_Frames)
+        m_LogicalDevice.destroyImageView(frame.ImageView);
+    for (vk::Fence fence : m_InFlightFences)
+        m_LogicalDevice.destroyFence(fence);
+    for (vk::Semaphore semaphore : m_ImageAcquiredSemaphores)
+        m_LogicalDevice.destroySemaphore(semaphore);
+    for (vk::Semaphore semaphore : m_RenderCompleteSemaphores)
+        m_LogicalDevice.destroySemaphore(semaphore);
+    m_LogicalDevice.destroySwapchainKHR(m_Handle);
 }
 
 vk::SurfaceKHR Swapchain::GetSurface() const
@@ -107,13 +119,14 @@ uint32_t Swapchain::GetCurrentFrameInFlightIndex() const
     return m_CurrentFrameInFlightIndex;
 }
 
-bool Swapchain::AcquireImage(vk::Device device)
+bool Swapchain::AcquireImage()
 {
     const SynchronizationObjects &sync = GetCurrentSynchronizationObjects();
 
     {
-        vk::Result result =
-            device.waitForFences({ sync.InFlightFence }, vk::True, std::numeric_limits<uint64_t>::max());
+        vk::Result result = m_LogicalDevice.waitForFences(
+            { sync.InFlightFence }, vk::True, std::numeric_limits<uint64_t>::max()
+        );
 
         assert(result == vk::Result::eSuccess);
         if (result != vk::Result::eSuccess)
@@ -122,7 +135,7 @@ bool Swapchain::AcquireImage(vk::Device device)
 
     try
     {
-        vk::ResultValue result = device.acquireNextImageKHR(
+        vk::ResultValue result = m_LogicalDevice.acquireNextImageKHR(
             m_Handle, std::numeric_limits<uint64_t>::max(), sync.ImageAcquiredSemaphore, nullptr
         );
 
@@ -139,7 +152,7 @@ bool Swapchain::AcquireImage(vk::Device device)
         return false;
     }
 
-    device.resetFences({ sync.InFlightFence });
+    m_LogicalDevice.resetFences({ sync.InFlightFence });
     UpdateCurrentSyncronizationObjects();
 
     return true;

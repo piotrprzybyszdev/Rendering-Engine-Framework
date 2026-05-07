@@ -107,6 +107,7 @@ class PipelineLibrary
 {
 public:
     PipelineLibrary(vk::Device logicalDevice, ShaderLibrary *shaderLibrary);
+    ~PipelineLibrary();
 
     PipelineLibrary(const PipelineLibrary &) = delete;
     PipelineLibrary &operator=(const PipelineLibrary &) = delete;

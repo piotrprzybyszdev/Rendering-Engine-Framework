@@ -99,6 +99,24 @@ PipelineLibrary::PipelineLibrary(vk::Device logicalDevice, ShaderLibrary *shader
     m_PipelineCache = m_LogicalDevice.createPipelineCache(info);
 }
 
+PipelineLibrary::~PipelineLibrary()
+{
+    for (const auto &instance : m_GraphicsPipelineInstances)
+        if (instance.IsValid())
+            m_LogicalDevice.destroyPipeline(instance.Handle);
+    for (const auto &instance : m_ComputePipelineInstances)
+        if (instance.IsValid())
+            m_LogicalDevice.destroyPipeline(instance.Handle);
+    for (const auto &pipeline : m_GraphicsPipelines)
+        if (pipeline.IsValid())
+            m_LogicalDevice.destroyPipelineLayout(pipeline.Layout);
+    for (const auto &pipeline : m_ComputePipelines)
+        if (pipeline.IsValid())
+            m_LogicalDevice.destroyPipelineLayout(pipeline.Layout);
+    
+    m_LogicalDevice.destroyPipelineCache(m_PipelineCache);
+}
+
 void PipelineLibrary::SetPipelineCachePath(const std::filesystem::path &path)
 {
     m_PipelineCachePath = path;
@@ -171,6 +189,7 @@ bool PipelineLibrary::LoadPipeline(Pipeline& pipeline)
         
         if (!shader.IsValid())
         {
+            m_LogicalDevice.destroyPipelineLayout(pipeline.Layout);
             pipeline = Pipeline(std::move(pipeline.Name), std::move(pipeline.Shaders));
             logger::error(
                 "Cannot load pipeline `{}` because shader {} failed to compile", pipeline.Name,
@@ -219,6 +238,9 @@ bool PipelineLibrary::LoadPipeline(Pipeline& pipeline)
     vk::PipelineLayoutCreateInfo layoutCreateInfo;
     layoutCreateInfo.setSetLayouts(descLayout);
     layoutCreateInfo.setPushConstantRanges(pipeline.Reflection.PushConstantRanges);
+
+    if (pipeline.IsValid())
+        m_LogicalDevice.destroyPipelineLayout(pipeline.Layout);
 
     pipeline.Layout = m_LogicalDevice.createPipelineLayout(layoutCreateInfo);
     Application::GetInstance()->SetDebugName(pipeline.Layout, pipeline.Name.c_str());
@@ -338,6 +360,9 @@ bool PipelineLibrary::CompilePipelineInstance(ComputePipelineInstanceId id)
     vk::ComputePipelineCreateInfo computePipelineInfo;
     computePipelineInfo.setStage(stageInfo);
     computePipelineInfo.setLayout(pipeline.Layout);
+
+    if (instance.IsValid())
+        m_LogicalDevice.destroyPipeline(instance.Handle);
 
     auto result = m_LogicalDevice.createComputePipeline(m_PipelineCache, computePipelineInfo);
     if (!result.has_value())
@@ -473,6 +498,9 @@ bool PipelineLibrary::CompilePipelineInstance(GraphicsPipelineInstanceId id)
     graphicsPipelineInfo.setStages(stageInfos);
     graphicsPipelineInfo.setLayout(pipeline.Layout);
     graphicsPipelineInfo.setPNext(renderingInfo);
+
+    if (instance.IsValid())
+        m_LogicalDevice.destroyPipeline(instance.Handle);
 
     auto result = m_LogicalDevice.createGraphicsPipeline(m_PipelineCache, graphicsPipelineInfo);
     if (!result.has_value())

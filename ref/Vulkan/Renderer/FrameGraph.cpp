@@ -232,7 +232,7 @@ void FrameGraph::SetFrame(const FrameInfo &frameInfo)
             ));
         }
 
-        for (auto& [name, imageView] : m_ImageViewResources)
+        for (auto &[name, imageView] : m_ImageViewResources)
         {
             const auto &image = m_ImageResources.at(imageView.Image);
             if (!image.IsBuffered)
@@ -247,7 +247,7 @@ void FrameGraph::SetFrame(const FrameInfo &frameInfo)
         m_RenderingResourcesCount++;
         isFrameCountChanged = true;
     }
-
+    
     if (isFrameCountChanged == false && m_BuffersToUpdate.empty() && m_ImagesToUpdate.empty() &&
         m_ImageViewsToUpdate.empty())
         return;

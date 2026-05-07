@@ -1,5 +1,7 @@
 #include "Core/Core.h"
 
+#include "Vulkan/Application.h"
+
 #include "Renderer.h"
 
 namespace ref::vulkan
@@ -18,6 +20,9 @@ Renderer::Renderer(RendererSpec spec)
     vk::CommandBufferAllocateInfo allocateInfo(m_CommandPool, vk::CommandBufferLevel::ePrimary, 1);
     m_CommandBuffer = m_LogicalDevice.allocateCommandBuffers(allocateInfo)[0];
 
+    Application::GetInstance()->SetDebugName(m_CommandPool, "REF Main Command Buffer Pool");
+    Application::GetInstance()->SetDebugName(m_CommandBuffer, "REF Main Command Buffer");
+
     m_StagingBuffer = m_ResourceAllocator->AddBufferResource("REF Staging Buffer");
     m_ResourceAllocator->AllocateResource(
         m_StagingBuffer,
@@ -31,6 +36,12 @@ Renderer::Renderer(RendererSpec spec)
 Renderer::~Renderer()
 {
     m_MainQueue.Handle.waitIdle();
+
+    for (const auto &resources : m_RenderingResources)
+        m_LogicalDevice.destroyCommandPool(resources.CommandPool);
+
+    m_LogicalDevice.destroyFence(m_Fence);
+    m_LogicalDevice.destroyCommandPool(m_CommandPool);
 }
 
 void Renderer::UploadWithStaging(
@@ -200,9 +211,10 @@ void Renderer::OnResize(const Swapchain *swapchain)
 {
     m_Swapchain = swapchain;
 
-    m_RenderingResources.clear();
-    for (uint32_t i = 0; i < m_Swapchain->GetInFlightCount(); i++)
+    while (m_Swapchain->GetInFlightCount() > m_RenderingResources.size())
     {
+        const uint32_t i = static_cast<uint32_t>(m_RenderingResources.size());
+
         RenderingResources resources = {};
 
         vk::CommandPoolCreateInfo createInfo(
@@ -214,6 +226,13 @@ void Renderer::OnResize(const Swapchain *swapchain)
             resources.CommandPool, vk::CommandBufferLevel::ePrimary, 1
         );
         resources.CommandBuffer = m_LogicalDevice.allocateCommandBuffers(allocateInfo)[0];
+
+        Application::GetInstance()->SetDebugName(
+            resources.CommandPool, std::format("REF Frame Command Buffer Pool {}", i).c_str()
+        );
+        Application::GetInstance()->SetDebugName(
+            resources.CommandBuffer, std::format("REF Frame Command Buffer {}", i).c_str()
+        );
 
         m_RenderingResources.push_back(resources);
     }

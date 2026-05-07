@@ -53,9 +53,20 @@ Application::Application(ApplicationSpec &&spec)
 
 Application::~Application()
 {
+    m_States.clear();
+
     m_ShaderLibrary->WriteShaderCaches();
     m_PipelineLibrary->WritePipelineCache();
     s_Instance = nullptr;
+
+    m_PipelineLibrary.reset();
+    m_ShaderLibrary.reset();
+    m_Swapchain.reset();
+    m_LogicalDevice.destroy();
+    m_Instance.destroySurfaceKHR(m_Surface);
+    if (m_DebugMessenger.has_value())
+        m_Instance.destroyDebugUtilsMessengerEXT(m_DebugMessenger.value(), nullptr, m_DispatchLoader);
+    m_Instance.destroy();
 }
 
 ShaderLibrary &Application::GetShaderLibrary()
@@ -142,7 +153,7 @@ void Application::Run(const std::string &state)
         if (m_CurrentState != m_NextState)
             continue;
 
-        m_Swapchain->AcquireImage(m_LogicalDevice);
+        m_Swapchain->AcquireImage();
         m_CurrentState->OnRender();
         m_Swapchain->Present(m_MainQueue.Handle);
     }
