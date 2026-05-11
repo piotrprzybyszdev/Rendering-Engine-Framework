@@ -173,34 +173,6 @@ void DemoApplicationState::SetSwapchainImageCount(uint32_t imageCount)
     m_SwapchainImageCount = imageCount;
 }
 
-bool DemoApplicationState::EnsurePipelinesCompiled(std::initializer_list<ComputePipelineInstanceId> pipelines)
-{
-    PipelineLibrary &pipelineLibrary = Application::GetInstance()->GetPipelineLibrary();
-
-    bool success = true;
-    for (auto id : pipelines)
-        success &= pipelineLibrary.CompilePipelineInstance(id);
-
-    if (!success)
-        SetShaderErrors();
-
-    return success;
-}
-
-bool DemoApplicationState::EnsurePipelinesCompiled(std::initializer_list<GraphicsPipelineInstanceId> pipelines)
-{
-    PipelineLibrary &pipelineLibrary = Application::GetInstance()->GetPipelineLibrary();
-
-    bool success = true;
-    for (auto id : pipelines)
-        success &= pipelineLibrary.CompilePipelineInstance(id);
-
-    if (!success)
-        SetShaderErrors();
-
-    return success;
-}
-
 void DemoApplicationState::SetShaderErrors()
 {
     auto errors = Application::GetInstance()->GetShaderLibrary().GetCompilationErrors();
@@ -232,8 +204,6 @@ void ComputeApplicationState::OnEnter(ApplicationState *previous)
         vk::ImageUsageFlagBits::eColorAttachment
     );
     DemoApplicationState::OnEnter(previous);
-    if (!DemoApplicationState::EnsurePipelinesCompiled({ m_PipelineId }))
-        return;
 
     FrameGraphBuilder builder;
 
@@ -307,6 +277,7 @@ void ComputeApplicationState::OnUpdate(float timeStep)
     if (m_Time > 5.0f)
     {
         m_Time -= 5.0f;
+        m_MainQueue.Handle.waitIdle();
         ErrorApplicationState::ReloadShaders("Compute Demo State");
     }
 }
@@ -361,8 +332,6 @@ void TriangleApplicationState::OnEnter(ApplicationState *previous)
 {
     SetDefaultSwapchain();
     DemoApplicationState::OnEnter(previous);
-    if (!DemoApplicationState::EnsurePipelinesCompiled({ m_TrianglePiplineId }))
-        return;
 
     FrameGraphBuilder builder;
 
@@ -544,10 +513,6 @@ void ParticleApplicationState::OnEnter(ApplicationState * previous)
 {
     SetDefaultSwapchain();
     DemoApplicationState::OnEnter(previous);
-    if (!DemoApplicationState::EnsurePipelinesCompiled({ m_ComputePipelineId }))
-        return;
-    if (!DemoApplicationState::EnsurePipelinesCompiled({ m_ParticlePipelineId }))
-        return;
 
     struct Vertex
     {
@@ -817,10 +782,6 @@ void CubeApplicationState::OnEnter(ApplicationState *previous)
 {
     SetDefaultSwapchain();
     DemoApplicationState::OnEnter(previous);
-    if (!DemoApplicationState::EnsurePipelinesCompiled(
-            { m_CubePipelineId, m_MirrorPipelineId, m_ReflectionPipelineId }
-        ))
-        return;
 
     struct Vertex
     {

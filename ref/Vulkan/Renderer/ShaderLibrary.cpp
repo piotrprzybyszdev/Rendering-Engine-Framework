@@ -455,7 +455,7 @@ ShaderId ShaderLibrary::AddShader(ShaderInfo info)
     return ShaderId(m_ShaderInfos.size() - 1);
 }
 
-void ShaderLibrary::LoadShader(ShaderId id)
+bool ShaderLibrary::LoadShader(ShaderId id)
 {
     const ShaderInfo &info = m_ShaderInfos[id];
     logger::debug("Loading Shader {}", info.Path.string());
@@ -464,7 +464,7 @@ void ShaderLibrary::LoadShader(ShaderId id)
     if (updateTime <= m_Shaders[id].UpdateTime)
     {
         logger::debug("Shader {} is already up to date", info.Path.string());
-        return;
+        return true;
     }
 
     const std::filesystem::path cache = GetShaderCachePath(info.Path);
@@ -474,30 +474,37 @@ void ShaderLibrary::LoadShader(ShaderId id)
     // The fact that the shader cache was written after the shader was last modified
     // does not mean that the cache is up to date but it's a good heuristic initially
     if (m_Shaders[id].UpdateTime < updateTime)
-        CompileShader(id);
+        return CompileShader(id);
+    return true;
 }
 
-void ShaderLibrary::LoadShaders()
+bool ShaderLibrary::LoadShaders()
 {
+    bool success = true;
     for (size_t id = 0; id < m_ShaderInfos.size(); id++)
-        LoadShader(ShaderId(id));
+        success &= LoadShader(ShaderId(id));
+    return success;
 }
 
-void ShaderLibrary::LoadShadersAsync(uint32_t &total, std::atomic<uint32_t> &done, uint32_t threadCount)
+void ShaderLibrary::LoadShadersAsync(
+    uint32_t &total, std::atomic<uint32_t> &done, uint32_t threadCount, std::promise<bool> &result
+)
 {
     total = static_cast<uint32_t>(m_ShaderInfos.size());
+    std::atomic<bool> success = true;
 
-    std::thread mainThread([threadCount, &done, this]() {
+    std::thread mainThread([threadCount, &done, &result, &success, this]() {
         std::atomic<uint32_t> index = 0;
         std::vector<std::thread> threads;
 
         for (uint32_t i = 0; i < threadCount; i++)
         {
-            threads.push_back(std::thread([threadCount, &done, &index, this]() {
+            threads.push_back(std::thread([threadCount, &done, &index, &success, this]() {
                 uint32_t id;
                 while ((id = index++) < m_ShaderInfos.size())
                 {
-                    LoadShader(ShaderId(id));
+                    if (LoadShader(ShaderId(id)) == false)
+                        success = false;
                     done++;
                 }
             }));
@@ -505,6 +512,8 @@ void ShaderLibrary::LoadShadersAsync(uint32_t &total, std::atomic<uint32_t> &don
 
         for (auto &thread : threads)
             thread.join();
+
+        result.set_value_at_thread_exit(success);
     });
     mainThread.detach();
 }
@@ -525,7 +534,7 @@ void ShaderLibrary::WriteShaderCaches()
     }
 }
 
-void ShaderLibrary::CompileShader(ShaderId id)
+bool ShaderLibrary::CompileShader(ShaderId id)
 {
     const auto &shaderInfo = m_ShaderInfos[id];
 
@@ -558,12 +567,13 @@ void ShaderLibrary::CompileShader(ShaderId id)
     if (result.GetCompilationStatus() != shaderc_compilation_status::shaderc_compilation_status_success)
     {
         m_Shaders[id] = {
+            .Includes = std::move(includeInfo.IncludedFiles),
             .UpdateTime = updateTime,
             .CompilationError = result.GetErrorMessage(),
         };
         logger::error("Shader `{}` failed compilation", shaderInfo.Path.string());
         logger::error("{}", result.GetErrorMessage());
-        return;
+        return false;
     }
 
     const auto spv = std::span(result);
@@ -575,6 +585,8 @@ void ShaderLibrary::CompileShader(ShaderId id)
         .Includes = std::move(includeInfo.IncludedFiles),
         .UpdateTime = updateTime,
     };
+
+    return true;
 }
 
 const ShaderInfo &ShaderLibrary::GetShaderInfo(ShaderId id) const

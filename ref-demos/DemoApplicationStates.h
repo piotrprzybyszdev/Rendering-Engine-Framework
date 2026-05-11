@@ -43,9 +43,6 @@ protected:
     void SetSwapchainUsageFlags(vk::ImageUsageFlags usageFlags);
     void SetSwapchainImageCount(uint32_t imageCount);
 
-    bool EnsurePipelinesCompiled(std::initializer_list<ComputePipelineInstanceId> pipelines);
-    bool EnsurePipelinesCompiled(std::initializer_list<GraphicsPipelineInstanceId> pipelines);
-
 protected:
     std::unique_ptr<ResourceAllocator> m_ResourceAllocator;
     std::unique_ptr<DemoUserInterface> m_UserInterface;

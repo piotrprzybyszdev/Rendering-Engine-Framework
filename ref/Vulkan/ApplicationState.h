@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.hpp>
 
 #include <atomic>
+#include <future>
 #include <map>
 #include <string>
 #include <vector>
@@ -115,7 +116,7 @@ private:
 class LoadingUserInterface final : public UserInterface
 {
 public:
-    LoadingUserInterface(UserInterfaceVulkanSpec spec, const std::string &progressText);
+    LoadingUserInterface(UserInterfaceVulkanSpec spec, const std::vector<std::string> &progressTexts);
     ~LoadingUserInterface() override = default;
 
     void OnEnter() override;
@@ -123,19 +124,19 @@ public:
 
     void OnDefineUI(float timeStep) override;
 
-    void SetProgress(uint32_t total, uint32_t done);
+    void SetProgress(size_t taskIndex, uint32_t total, uint32_t done);
 
 private:
-    const std::string m_ProgressText;
-    uint32_t m_Total = 0;
-    uint32_t m_Done = 0;
+    const std::vector<std::string> &m_ProgressTexts;
+    std::vector<std::pair<uint32_t, uint32_t>> m_Tasks;
 };
 
 class LoadingApplicationState : public ApplicationState
 {
 public:
     LoadingApplicationState(
-        const ApplicationStateSpec &spec, const std::string &state, const std::string &progressText
+        const ApplicationStateSpec &spec, const std::string &state,
+        const std::vector<std::string> &progressTexts
     );
     ~LoadingApplicationState() override;
 
@@ -159,12 +160,11 @@ protected:
     std::unique_ptr<FrameGraph> m_FrameGraph;
     std::unique_ptr<Renderer> m_Renderer;
 
-    uint32_t m_Total = 0;
-    std::atomic<uint32_t> m_Done = 0;
+    std::vector<std::pair<uint32_t, std::atomic<uint32_t>>> m_Tasks;
 
 private:
     const std::string m_StateName = "REF Loading State";
-    const std::string m_ProgressText = "Loading";
+    const std::vector<std::string> m_ProgressTexts;
 };
 
 class CompilingShadersApplicationState final : public LoadingApplicationState
@@ -186,6 +186,13 @@ public:
 
 public:
     static inline const std::string g_StateName = "REF Compiling Shaders State";
+
+private:
+    uint32_t m_ThreadCount = 1;
+    bool m_PrevShadersCompiled = false;
+    bool m_PrevPipelinesCompiled = false;
+    std::promise<bool> m_ShaderCompilationPromise;
+    std::promise<bool> m_CompilationPromise;
 
 private:
     static inline std::string s_NextState = "No State";

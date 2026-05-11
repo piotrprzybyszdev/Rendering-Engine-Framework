@@ -91,9 +91,11 @@ public:
 
     ShaderId AddShader(ShaderInfo info);
 
-    void LoadShader(ShaderId id);
-    void LoadShaders();
-    void LoadShadersAsync(uint32_t &total, std::atomic<uint32_t> &done, uint32_t threadCount);
+    bool LoadShader(ShaderId id);
+    bool LoadShaders();
+    void LoadShadersAsync(
+        uint32_t &total, std::atomic<uint32_t> &done, uint32_t threadCount, std::promise<bool> &result
+    );
 
     void WriteShaderCaches();
 
@@ -114,7 +116,7 @@ private:
 
 private:
     ReflectionData ReflectShader(std::span<const uint32_t> spirv, vk::ShaderStageFlagBits stage);
-    void CompileShader(ShaderId id);
+    bool CompileShader(ShaderId id);
 
     std::filesystem::path GetShaderCachePath(const std::filesystem::path &path);
     std::filesystem::file_time_type GetUpdateTime(ShaderId id) const;

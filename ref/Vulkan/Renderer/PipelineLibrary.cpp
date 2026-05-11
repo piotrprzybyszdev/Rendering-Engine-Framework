@@ -107,8 +107,8 @@ void PipelineLibrary::SetPipelineCachePath(const std::filesystem::path &path)
 {
     m_PipelineCachePath = path;
 
-    const std::filesystem::path cahcePath = GetCachePath();
-    if (!std::filesystem::exists(cahcePath))
+    const std::filesystem::path cachePath = GetCachePath();
+    if (!std::filesystem::exists(cachePath))
     {
         logger::debug("Pipeline cache was not found");
         if (m_PipelineCache == nullptr)
@@ -116,7 +116,7 @@ void PipelineLibrary::SetPipelineCachePath(const std::filesystem::path &path)
         return;
     }
 
-    const std::vector<std::byte> cache = DeserializePipelineCache(cahcePath);
+    const std::vector<std::byte> cache = DeserializePipelineCache(cachePath);
 
     m_LogicalDevice.destroyPipelineCache(m_PipelineCache);
 
@@ -158,14 +158,89 @@ GraphicsPipelineInstanceId PipelineLibrary::AddPipelineInstance(GraphicsPipeline
     return GraphicsPipelineInstanceId(m_GraphicsPipelineInstanceInfos.size() - 1);
 }
 
+uint32_t PipelineLibrary::GetPipelineInstanceCount() const
+{
+    return static_cast<uint32_t>(m_ComputePipelineInstances.size() + m_GraphicsPipelineInstances.size());
+}
+
 bool PipelineLibrary::CompilePipelines()
 {
+    for (Pipeline &pipeline : m_ComputePipelines)
+        LoadPipeline(pipeline);
+    for (Pipeline &pipeline : m_GraphicsPipelines)
+        LoadPipeline(pipeline);
+
     bool success = true;
     for (size_t id = 0; id < m_ComputePipelineInstances.size(); id++)
         success &= CompilePipelineInstance(ComputePipelineInstanceId(id));
     for (size_t id = 0; id < m_GraphicsPipelineInstances.size(); id++)
         success &= CompilePipelineInstance(GraphicsPipelineInstanceId(id));
     return success;
+}
+
+void PipelineLibrary::CompilePipelinesAsync(
+    uint32_t &total, std::atomic<uint32_t> &done, uint32_t threadCount, std::promise<bool> &result
+)
+{
+    total = static_cast<uint32_t>(m_ComputePipelineInstances.size() + m_GraphicsPipelineInstances.size());
+
+    std::thread mainThread([this, threadCount, &done, &result]() {
+        auto dispatchThreads = [threadCount,
+                                &done](auto &&func, size_t computeCount, size_t graphicsCount, bool inc) {
+            std::atomic<uint32_t> computeIndex = 0, graphicsIndex = 0;
+            std::vector<std::thread> threads;
+
+            std::atomic<bool> result = true;
+            for (uint32_t i = 0; i < threadCount; i++)
+            {
+                threads.push_back(std::thread([&]() {
+                    uint32_t id;
+                    while ((id = computeIndex++) < computeCount)
+                    {
+                        if (func(id, 0) == false)
+                            result = false;
+                        if (inc)
+                            done++;
+                    }
+                    while ((id = graphicsIndex++) < graphicsCount)
+                    {
+                        if (func(id, 1) == false)
+                            result = false;
+                        if (inc)
+                            done++;
+                    }
+                }));
+            }
+
+            for (auto &thread : threads)
+                thread.join();
+            return result.load();
+        };
+
+        bool success = true;
+        success &= dispatchThreads(
+            [this](size_t id, int pipelineType) {
+                if (pipelineType == 0)
+                    return LoadPipeline(m_ComputePipelines[id]);
+                else
+                    return LoadPipeline(m_GraphicsPipelines[id]);
+            },
+            m_ComputePipelines.size(), m_GraphicsPipelines.size(), false
+        );
+
+        success &= dispatchThreads(
+            [this](size_t id, int pipelineType) {
+                if (pipelineType == 0)
+                    return CompilePipelineInstance(ComputePipelineInstanceId(id));
+                else
+                    return CompilePipelineInstance(GraphicsPipelineInstanceId(id));
+            },
+            m_ComputePipelineInstances.size(), m_GraphicsPipelineInstances.size(), true
+        );
+
+        result.set_value_at_thread_exit(success);
+    });
+    mainThread.detach();
 }
 
 void PipelineLibrary::WritePipelineCache()
@@ -177,8 +252,9 @@ void PipelineLibrary::WritePipelineCache()
 bool PipelineLibrary::LoadPipeline(Pipeline& pipeline)
 {
     logger::debug("Loading pipeline `{}`", pipeline.Name);
-    pipeline.UpdateTime = std::filesystem::file_time_type::min();
-    pipeline.Reflection = ReflectionData();
+
+    auto updateTime = std::filesystem::file_time_type::min();
+    auto reflection = ReflectionData();
 
     ShaderId previousShaderId;
     for (ShaderId shaderId : pipeline.Shaders)
@@ -186,8 +262,6 @@ bool PipelineLibrary::LoadPipeline(Pipeline& pipeline)
         if (!shaderId.IsValid())
             continue;
 
-        m_ShaderLibrary->LoadShader(shaderId);
-        
         const ShaderInfo &shaderInfo = m_ShaderLibrary->GetShaderInfo(shaderId);
         const Shader &shader = m_ShaderLibrary->GetShader(shaderId);
         
@@ -196,14 +270,14 @@ bool PipelineLibrary::LoadPipeline(Pipeline& pipeline)
             m_LogicalDevice.destroyPipelineLayout(pipeline.Layout);
             pipeline = Pipeline(std::move(pipeline.Name), std::move(pipeline.Shaders));
             logger::error(
-                "Cannot load pipeline `{}` because shader {} failed to compile", pipeline.Name,
+                "Cannot load pipeline `{}` because shader {} is not compiled", pipeline.Name,
                 shaderInfo.Path.string()
             );
             return false;
         }
 
-        pipeline.UpdateTime = std::max(pipeline.UpdateTime, shader.UpdateTime);
-        pipeline.Reflection.Combine(shader.Reflection);
+        updateTime = std::max(pipeline.UpdateTime, shader.UpdateTime);
+        reflection.Combine(shader.Reflection);
 
         if (previousShaderId.IsValid())
         {
@@ -226,11 +300,14 @@ bool PipelineLibrary::LoadPipeline(Pipeline& pipeline)
         previousShaderId = shaderId;
     }
 
-    if (pipeline.IsValid() && pipeline.UpdateTime <= pipeline.UpdateTime)
+    if (pipeline.IsValid() && updateTime <= pipeline.UpdateTime)
     {
         logger::debug("Pipeline `{}` is up to date", pipeline.Name);
         return true;
     }
+
+    pipeline.UpdateTime = updateTime;
+    pipeline.Reflection = std::move(reflection);
 
     // TODO: ArraySize Hint
     pipeline.DescriptorSetBuilder = DescriptorSetBuilder(m_LogicalDevice);
@@ -328,7 +405,7 @@ bool PipelineLibrary::CompilePipelineInstance(ComputePipelineInstanceId id)
     const auto &pipelineInstanceInfo = m_ComputePipelineInstanceInfos[id];
     const auto &pipeline = m_ComputePipelines[pipelineInstanceInfo.PipelineId];
 
-    if (!LoadPipeline(m_ComputePipelines[pipelineInstanceInfo.PipelineId]))
+    if (!m_ComputePipelines[pipelineInstanceInfo.PipelineId].IsValid())
     {
         logger::error(
             "Cannot load compute pipeline instance `{}` because compute pipeline `{}` failed to load",
@@ -394,7 +471,7 @@ bool PipelineLibrary::CompilePipelineInstance(GraphicsPipelineInstanceId id)
     const auto &pipelineInstanceInfo = m_GraphicsPipelineInstanceInfos[id];
     const auto &pipeline = m_GraphicsPipelines[pipelineInstanceInfo.PipelineId];
 
-    if (!LoadPipeline(m_GraphicsPipelines[pipelineInstanceInfo.PipelineId]))
+    if (!m_GraphicsPipelines[pipelineInstanceInfo.PipelineId].IsValid())
     {
         logger::error(
             "Cannot load graphics pipeline instance `{}` because graphics pipeline `{}` failed to load",

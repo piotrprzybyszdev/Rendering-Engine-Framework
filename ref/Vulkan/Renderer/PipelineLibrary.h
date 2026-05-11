@@ -4,6 +4,7 @@
 
 #include <array>
 #include <filesystem>
+#include <future>
 #include <string>
 #include <span>
 #include <utility>
@@ -123,7 +124,11 @@ public:
     bool CompilePipelineInstance(ComputePipelineInstanceId id);
     bool CompilePipelineInstance(GraphicsPipelineInstanceId id);
 
+    uint32_t GetPipelineInstanceCount() const;
     bool CompilePipelines();
+    void CompilePipelinesAsync(
+        uint32_t &total, std::atomic<uint32_t> &done, uint32_t threadCount, std::promise<bool> &result
+    );
 
     void WritePipelineCache();
 

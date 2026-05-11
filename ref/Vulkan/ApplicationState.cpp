@@ -260,19 +260,50 @@ void ErrorApplicationState::SetErrorState(const std::string &prevState)
 
 bool ErrorApplicationState::ReloadShaders(const std::string &prevState)
 {
-    bool success = Application::GetInstance()->GetPipelineLibrary().CompilePipelines();
-    if (!success)
+    uint32_t threadCount = std::thread::hardware_concurrency();
+    if (threadCount == 0)
+        threadCount = 1;
+
     {
-        auto errors = Application::GetInstance()->GetShaderLibrary().GetCompilationErrors();
-        s_Errors = std::vector(errors.begin(), errors.end());
-        SetErrorState(prevState);
+        uint32_t total = 0;
+        std::atomic<uint32_t> done = 0;
+        std::promise<bool> result;
+        Application::GetInstance()->GetShaderLibrary().LoadShadersAsync(total, done, threadCount, result);
+        auto future = result.get_future();
+        const bool success = future.get();
+        if (!success)
+        {
+            auto errors = Application::GetInstance()->GetShaderLibrary().GetCompilationErrors();
+            s_Errors = std::vector(errors.begin(), errors.end());
+            SetErrorState(prevState);
+            return false;
+        }
     }
 
-    return success;
+    {
+        uint32_t total = 0;
+        std::atomic<uint32_t> done = 0;
+        std::promise<bool> result;
+        Application::GetInstance()->GetPipelineLibrary().CompilePipelinesAsync(
+            total, done, threadCount, result
+        );
+        auto future = result.get_future();
+        const bool success = future.get();
+        if (!success)
+        {
+            s_Errors = { "Pipelines failed to compile" };
+            SetErrorState(prevState);
+            return false;
+        }
+    }
+    
+    return true;
 }
 
-LoadingUserInterface::LoadingUserInterface(UserInterfaceVulkanSpec spec, const std::string &progressText)
-    : UserInterface(spec), m_ProgressText(progressText)
+LoadingUserInterface::LoadingUserInterface(
+    UserInterfaceVulkanSpec spec, const std::vector<std::string> &progressTexts
+)
+    : UserInterface(spec), m_ProgressTexts(progressTexts), m_Tasks(progressTexts.size())
 {
 }
 
@@ -304,27 +335,31 @@ void LoadingUserInterface::OnDefineUI([[maybe_unused]] float timeStep)
             ImGuiWindowFlags_NoBringToFrontOnFocus
     );
 
-    ImGui::SetCursorPosX(viewport->WorkSize.x / 4.0f);
     ImGui::SetCursorPosY(viewport->WorkSize.y / 4.0f);
-    const float progress = static_cast<float>(m_Done) / static_cast<float>(m_Total);
-    const std::string text = std::format("{} [{}/{}]", m_ProgressText, m_Done, m_Total);
-    ImGui::ProgressBar(progress, ImVec2(viewport->WorkSize.x / 2.0f, 0), text.c_str());
+    for (auto &&[text, task] : std::views::zip(m_ProgressTexts, m_Tasks))
+    {
+        const auto [total, done] = task;
+        ImGui::SetCursorPosX(viewport->WorkSize.x / 4.0f);
+        const float progress = static_cast<float>(done) / static_cast<float>(total);
+        const std::string barText = std::format("{} [{}/{}]", text, done, total);
+        ImGui::ProgressBar(progress, ImVec2(viewport->WorkSize.x / 2.0f, 0), barText.c_str());
+    }
+
     ImGui::End();
 
     ImGui::PopStyleVar(2);
 }
 
-void LoadingUserInterface::SetProgress(uint32_t total, uint32_t done)
+void LoadingUserInterface::SetProgress(size_t taskIndex, uint32_t total, uint32_t done)
 {
-    m_Total = total;
-    m_Done = done;
+    m_Tasks[taskIndex] = std::make_pair(total, done);
 }
 
 LoadingApplicationState::LoadingApplicationState(
-    const ApplicationStateSpec &spec, const std::string &state, const std::string &progressText
+    const ApplicationStateSpec &spec, const std::string &state, const std::vector<std::string> &progressTexts
 )
     : m_LogicalDevice(spec.LogicalDevice), m_MainQueue(spec.Queues.at(Application::MainQueueName)),
-      m_StateName(state), m_ProgressText(progressText)
+      m_StateName(state), m_ProgressTexts(progressTexts), m_Tasks(progressTexts.size())
 {
 }
 
@@ -369,7 +404,7 @@ void LoadingApplicationState::OnEnter(ApplicationState * /* previous */)
         .ImageFormat = vk::Format::eR8G8B8A8Unorm,
     };
 
-    m_UserInterface = std::make_unique<LoadingUserInterface>(userInterfaceSpec, m_ProgressText);
+    m_UserInterface = std::make_unique<LoadingUserInterface>(userInterfaceSpec, m_ProgressTexts);
 
     FrameGraphBuilder builder;
     builder.AddDeviceImageWithView(
@@ -424,8 +459,11 @@ void LoadingApplicationState::OnEnter(ApplicationState * /* previous */)
 
     m_UserInterface->OnEnter();
 
-    m_Total = 0;
-    m_Done = 0;
+    for (auto& [total, done] : m_Tasks)
+    {
+        total = 0;
+        done = 0;
+    }
 }
 
 void LoadingApplicationState::OnExit(ApplicationState * /* next */)
@@ -457,7 +495,8 @@ void LoadingApplicationState::OnResize(const Swapchain *swapchain)
 
 void LoadingApplicationState::OnUpdate([[maybe_unused]] float timeStep)
 {
-    m_UserInterface->SetProgress(m_Total, m_Done);
+    for (size_t index = 0; index < m_Tasks.size(); index++)
+        m_UserInterface->SetProgress(index, m_Tasks[index].first, m_Tasks[index].second);
     m_UserInterface->OnUpdate(timeStep);
 }
 
@@ -468,26 +507,36 @@ void LoadingApplicationState::OnRender()
 }
 
 CompilingShadersApplicationState::CompilingShadersApplicationState(const ApplicationStateSpec &spec)
-    : LoadingApplicationState(spec, g_StateName, "Compiling Shaders")
+    : LoadingApplicationState(spec, g_StateName, { "Compiling Shaders", "Compiling Pipelines" })
 {
+    m_ThreadCount = std::thread::hardware_concurrency();
+    if (m_ThreadCount == 0)
+        m_ThreadCount = 1;
 }
 
 void CompilingShadersApplicationState::OnEnter(ApplicationState *previous)
 {
     LoadingApplicationState::OnEnter(previous);
 
-    uint32_t threadCount = std::thread::hardware_concurrency();
-    if (threadCount == 0)
-        threadCount = 1;
+    m_PrevShadersCompiled = false;
+    m_PrevPipelinesCompiled = false;
+    m_CompilationPromise = std::promise<bool>();
+    m_ShaderCompilationPromise = std::promise<bool>();
 
-    Application::GetInstance()->GetShaderLibrary().LoadShadersAsync(m_Total, m_Done, threadCount);
+    Application::GetInstance()->GetShaderLibrary().LoadShadersAsync(
+        m_Tasks[0].first, m_Tasks[0].second, m_ThreadCount, m_ShaderCompilationPromise
+    );
+    m_Tasks[1].first = Application::GetInstance()->GetPipelineLibrary().GetPipelineInstanceCount();
 }
 
 void CompilingShadersApplicationState::OnUpdate(float timeStep)
 {
     LoadingApplicationState::OnUpdate(timeStep);
 
-    if (m_Total == m_Done)
+    const bool shadersCompiled = m_Tasks[0].first == m_Tasks[0].second;
+    const bool pipelinesCompiled = m_Tasks[1].first == m_Tasks[1].second;
+
+    if (shadersCompiled && !m_PrevShadersCompiled)
     {
         auto errors = Application::GetInstance()->GetShaderLibrary().GetCompilationErrors();
 
@@ -497,8 +546,24 @@ void CompilingShadersApplicationState::OnUpdate(float timeStep)
             ErrorApplicationState::SetErrorState(g_StateName);
         }
         else
-            Application::GetInstance()->SetNextState(s_NextState);
+            Application::GetInstance()->GetPipelineLibrary().CompilePipelinesAsync(
+                m_Tasks[1].first, m_Tasks[1].second, m_ThreadCount, m_CompilationPromise
+            );
     }
+
+    if (pipelinesCompiled && !m_PrevPipelinesCompiled)
+    {
+        auto future = m_CompilationPromise.get_future();
+        const bool result = future.get();
+
+        if (result)
+            Application::GetInstance()->SetNextState(s_NextState);
+        else
+            ErrorApplicationState::SetErrorState(g_StateName);
+    }
+
+    m_PrevShadersCompiled = shadersCompiled;
+    m_PrevPipelinesCompiled = pipelinesCompiled;
 }
 
 void CompilingShadersApplicationState::AddToApplication(
